@@ -1,0 +1,26 @@
+{
+  "name": "lelang-bid-system",
+  "version": "1.0.0",
+  "description": "Sistem bid lelang.go.id dengan Chrome extension dan bot Telegram",
+  "scripts": {
+    "install-server": "cd server && npm install",
+    "install-extension": "cd extension && npm install",
+    "install-all": "npm run install-server && npm run install-extension",
+    "start-server": "cd server && npm start",
+    "dev-server": "cd server && npm run dev",
+    "build": "echo \"No build process needed\"",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "lelang",
+    "bid",
+    "chrome-extension",
+    "telegram-bot",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lelang Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            width: 400px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #003366 0%, #004080 100%);
+            padding: 20px;
+            text-align: center;
+            color: white;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            margin-bottom: 5px;
+        }
+        
+        .header p {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        
+        .status {
+            padding: 12px 20px;
+            font-size: 13px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .status::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.connected::before {
+            background: #28a745;
+        }
+        
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+      .status.disconnected::before {
+            background: #dc3545;
+            animation: pulse-red 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .content {
+            padding: 20px;
+        }
+        
+        .info-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-left: 4px solid #003366;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+        
+        .info-row:last-child {
+            margin-bottom: 0;
+        }
+        
+        .info-label {
+            color: #6c757d;
+            font-weight: 500;
+        }
+        
+        .info-value {
+            color: #333;
+            font-weight: 600;
+            text-align: right;
+        }
+        
+        .price-display {
+            background: linear-gradient(135deg, #003366 0%, #004080 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        
+        .price-label {
+            font-size: 12px;
+            opacity: 0.9;
+            margin-bottom: 5px;
+        }
+        
+        .price-value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        
+        .countdown {
+            background: #28a745;
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .bid-status {
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            font-weight: 600;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+        
+        .bid-status.winning {
+            background: #d4edda;
+            color: #155724;
+            border: 2px solid #28a745;
+        }
+        
+        .bid-status.losing {
+            background: #fff3cd;
+            color: #856404;
+            border: 2px solid #ffc107;
+        }
+        
+        .button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .button-primary {
+            background: linear-gradient(135deg, #003366 0%, #004080 100%);
+            color: white;
+        }
+        
+        .button-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 51, 102, 0.3);
+        }
+        
+        .button-primary:active {
+            transform: translateY(0);
+        }
+        
+        .divider {
+            height: 1px;
+            background: #dee2e6;
+            margin: 15px 0;
+        }
+        
+        .footer {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            text-align: center;
+            font-size: 11px;
+            color: #6c757d;
+        }
+        
+        #lotInfo {
+            display: none;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #6c757d;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 5px;
+        }
+        
+        .badge-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .badge-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+        @keyframes pulse-red {
+          0%, 100% { 
+              opacity: 1;
+              box-shadow: 0 0 0 rgba(220, 53, 69, 0.4);
+          }
+          50% { 
+              opacity: 0.7;
+              box-shadow: 0 0 10px rgba(220, 53, 69, 0.8);
+          }
+      }
+
+      .logout-warning {
+          display: none;
+          background: #fff3cd;
+          border: 2px solid #ffc107;
+          border-radius: 6px;
+          padding: 12px;
+          margin-bottom: 15px;
+          text-align: center;
+          font-size: 13px;
+          color: #856404;
+          font-weight: 600;
+      }
+
+      .logout-warning.show {
+          display: block;
+          animation: shake 0.5s;
+      }
+
+      @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-10px); }
+          75% { transform: translateX(10px); }
+      }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔨 Lelang Monitor</h1>
+            <p>Real-time Auction Tracker</p>
+        </div>
+        
+        <div id="status" class="status disconnected">
+            Memuat...
+        </div>
+        
+        <div class="content">
+           <div id="logoutWarning" class="logout-warning">
+              🚨 Sesi Anda telah berakhir!<br>
+              Silakan login kembali di lelang.go.id
+          </div>
+            <div id="lotInfo">
+                <!-- Countdown Timer -->
+                <div id="countdown" class="countdown">
+                    --:--:--:--
+                </div>
+                
+                <!-- Bid Status -->
+                <div id="bidStatus" class="bid-status">
+                    Memuat status...
+                </div>
+                
+                <!-- Price Display -->
+                <div class="price-display">
+                    <div class="price-label">Penawaran Tertinggi</div>
+                    <div class="price-value" id="lotPrice">-</div>
+                </div>
+                
+                <!-- Lot Information -->
+                <div class="info-card">
+                    <div class="info-row">
+                        <span class="info-label">Kode Lot</span>
+                        <span class="info-value" id="lotCode">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">KPKNL</span>
+                        <span class="info-value" id="kpknl">-</span>
+                    </div>
+                    <div class="divider"></div>
+                    <div class="info-row">
+                        <span class="info-label">Uraian</span>
+                    </div>
+                    <div class="info-value" id="lotTitle" style="margin-top: 5px; font-size: 12px; line-height: 1.4;">
+                        Tidak diketahui
+                    </div>
+                </div>
+                
+                <!-- Nilai Limit -->
+                <div class="info-card">
+                    <div class="info-row">
+                        <span class="info-label">Nilai Limit</span>
+                        <span class="info-value" id="nilaiLimit">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Status Login</span>
+                        <span class="info-value" id="loginStatus">-</span>
+                    </div>
+                </div>
+                
+                <!-- Action Button -->
+                <button id="testBid" class="button button-primary">
+                    🤖 Buka Bot Telegram
+                </button>
+            </div>
+            
+            <div id="loadingState" class="loading">
+                <p>⏳ Memuat data lelang...</p>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Lelang.go.id Extension v1.0</p>
+            <p style="margin-top: 5px;">Monitoring & Auto-bid Assistant</p>
+        </div>
+    </div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>

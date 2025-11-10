@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Lelang Monitor - Auto Bid Assistant",
+  "version": "1.0.0",
+  "description": "Monitor dan otomasi bidding untuk Lelang.go.id dengan integrasi Telegram Bot",
+  "permissions": [
+    "activeTab",
+    "cookies",
+    "storage",
+    "scripting",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://lelang.go.id/*",
+    "https://*.lelang.go.id/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://lelang.go.id/*",
+        "https://*.lelang.go.id/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
