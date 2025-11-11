@@ -723,49 +723,20 @@ async function handleBidKelipatan(chatId) {
     console.log('Bid Amount (hasil):', bidAmount);
     console.log('=========================');
 
-    const confirmMessage = `💰 *Bid Dengan Kelipatan*\n\n` +
+    // Info sebelum bid
+    const infoMessage = `💰 *Bid Dengan Kelipatan*\n\n` +
         `📊 Info:\n` +
         `• Nilai Limit: Rp ${nilaiLimit.toLocaleString('id-ID')}\n` +
         `• Harga Tertinggi: Rp ${hargaTertinggi.toLocaleString('id-ID')}\n` +
         `• Kelipatan Bid: Rp ${kelipatanBid.toLocaleString('id-ID')}\n` +
         `• Nominal Bid Anda: Rp ${bidAmount.toLocaleString('id-ID')}\n\n` +
-        `❓ Lanjutkan bid dengan nominal ini?`;
+        `🔄 Mengirim bid...`;
 
-    bot.sendMessage(chatId, confirmMessage, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: "✅ Ya, Kirim Bid", callback_data: `confirm_bid_${bidAmount}` },
-                    { text: "❌ Batal", callback_data: "check_status" }
-                ]
-            ]
-        }
-    });
+    await bot.sendMessage(chatId, infoMessage, { parse_mode: 'Markdown' });
 
-    // Simpan bid amount sementara untuk konfirmasi
-    session.pendingBidAmount = bidAmount;
-    userSessions.set(chatId, session);
+    // Langsung kirim bid tanpa konfirmasi
+    await handleBid(chatId, bidAmount);
 }
-
-// Handler untuk konfirmasi bid
-bot.on('callback_query', async (callbackQuery) => {
-    const data = callbackQuery.data;
-    const chatId = callbackQuery.message.chat.id;
-
-    if (data.startsWith('confirm_bid_')) {
-        bot.answerCallbackQuery(callbackQuery.id);
-
-        const session = userSessions.get(chatId);
-        if (session && session.pendingBidAmount) {
-            await handleBid(chatId, session.pendingBidAmount);
-
-            // Hapus pending bid amount
-            delete session.pendingBidAmount;
-            userSessions.set(chatId, session);
-        }
-    }
-});
 
 function handleBidMenu(chatId) {
     const session = userSessions.get(chatId);
