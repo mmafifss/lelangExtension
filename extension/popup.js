@@ -39,7 +39,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             chrome.tabs.sendMessage(tabId, payload, async (response) => {
                 if (chrome.runtime.lastError) {
                     const message = chrome.runtime.lastError.message || 'Unknown error';
-                    console.warn('sendMessage error:', message);
 
                     if (retries > 0) {
                         await ensureContentScript(tabId);

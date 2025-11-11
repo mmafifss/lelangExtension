@@ -1,5 +1,5 @@
 // ============================================
-// content.js (Content Script for Scraping)
+// content.js (Content Script for Scraping) - ENHANCED VERSION
 // ============================================
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -13,19 +13,80 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         return true;
     }
+
+    if (request.action === 'executeBid') {
+        try {
+            executeBidAPI(request.data).then(result => {
+                sendResponse(result);
+            }).catch(error => {
+                sendResponse({ success: false, error: error.message });
+            });
+        } catch (error) {
+            sendResponse({ success: false, error: error.message });
+        }
+        return true; // Async response
+    }
 });
+
+// Function untuk execute bid via API
+async function executeBidAPI(bidData) {
+    const { auctionId, bidAmount, passkey } = bidData;
+
+    // Ambil token dari localStorage
+    const token = localStorage.getItem('token-FO');
+    if (!token) {
+        throw new Error('Token tidak ditemukan. Pastikan sudah login.');
+    }
+
+    const apiUrl = 'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/pengajuan-penawaran';
+
+    const payload = {
+        auctionId: auctionId,
+        bidAmount: bidAmount,
+        bidTime: new Date().toISOString(),
+        passkey: passkey
+    };
+
+    console.log('🔄 Sending bid to API:', payload);
+
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`API Error ${response.status}: ${errorText}`);
+        }
+
+        const result = await response.json();
+        console.log('✅ Bid response:', result);
+
+        return {
+            success: true,
+            data: result,
+            message: 'Bid berhasil dikirim!'
+        };
+
+    } catch (error) {
+        console.error('❌ Bid error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
 
 function scrapeLotData() {
     // Helper function untuk mengambil text dari selector
     const getText = (selector) => {
         const element = document.querySelector(selector);
         return element ? element.textContent.trim() : null;
-    };
-
-    // Helper function untuk mengambil semua text dari selector
-    const getAllText = (selector) => {
-        const elements = document.querySelectorAll(selector);
-        return Array.from(elements).map(el => el.textContent.trim());
     };
 
     // Ambil countdown timer
@@ -73,23 +134,13 @@ function scrapeLotData() {
     const terbilangElement = document.querySelector('small.text-ternary-red-100');
     const terbilang = terbilangElement ? terbilangElement.textContent.trim() : null;
 
-    // Ambil data lot lelang dari disclosure panel - try multiple selectors
+    // Ambil data lot lelang
     const lotDetails = {};
-
-    // Try berbagai cara untuk mendapatkan data detail
     let detailRows = document.querySelectorAll('.text-primary-500 .flex.flex-col.justify-center.gap-2');
 
     // Jika tidak ada, coba selector alternatif
     if (detailRows.length === 0) {
         detailRows = document.querySelectorAll('[class*="flex-col"][class*="justify-center"][class*="gap-2"]');
-    }
-
-    // Jika masih tidak ada, coba dari parent
-    if (detailRows.length === 0) {
-        const disclosurePanel = document.querySelector('[id^="headlessui-disclosure-panel"]');
-        if (disclosurePanel) {
-            detailRows = disclosurePanel.querySelectorAll('.flex.flex-col.justify-center.gap-2');
-        }
     }
 
     detailRows.forEach(row => {
@@ -136,18 +187,56 @@ function scrapeLotData() {
         }
     });
 
-    // Fallback: jika data masih kosong, coba scrape langsung dari text
-    if (!lotDetails.kode) {
-        const allText = document.body.innerText;
-        const kodeMatch = allText.match(/Kode[\s\n]+([A-Z0-9]+)/);
-        if (kodeMatch) lotDetails.kode = kodeMatch[1];
+    // Scrape passkey dengan multiple methods
+    let passkey = null;
+
+    // Method 1: Dari PIN Bidding text
+    if (lotDetails.pinBidding) {
+        const pinMatch = lotDetails.pinBidding.match(/(\d{6})/);
+        if (pinMatch) {
+            passkey = pinMatch[1];
+        }
     }
 
-    if (!lotDetails.kpknl) {
-        const allText = document.body.innerText;
-        const kpknlMatch = allText.match(/KPKNL[\s\n]+(KPKNL [A-Za-z\s]+)/);
-        if (kpknlMatch) lotDetails.kpknl = kpknlMatch[1];
+    // Method 2: Dari disclosure panel
+    if (!passkey) {
+        const selectors = [
+            '#headlessui-disclosure-panel-\\:r8\\:',
+            '[id^="headlessui-disclosure-panel"]'
+        ];
+
+        for (const selector of selectors) {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => {
+                const text = el.textContent;
+                if (text.includes('PIN Bidding')) {
+                    const match = text.match(/(\d{6})/);
+                    if (match) {
+                        passkey = match[1];
+                    }
+                }
+            });
+            if (passkey) break;
+        }
     }
+
+    // Method 3: Dari tombol "Salin PIN Bidding"
+    if (!passkey) {
+        const copyButton = Array.from(document.querySelectorAll('button'))
+            .find(btn => btn.textContent.includes('Salin PIN Bidding'));
+
+        if (copyButton) {
+            const parent = copyButton.closest('.flex.flex-col.justify-center.gap-2');
+            if (parent) {
+                const pinText = parent.textContent;
+                const match = pinText.match(/(\d{6})/);
+                if (match) {
+                    passkey = match[1];
+                }
+            }
+        }
+    }
+
 
     // Ambil waktu server
     const serverTimeHour = getText('.fixed.bottom-\\[5\\%\\].left-0 .font-bold');
@@ -164,11 +253,16 @@ function scrapeLotData() {
     const urlMatch = window.location.href.match(/detail-open-bidding\/([a-f0-9-]+)/);
     const auctionUuid = urlMatch ? urlMatch[1] : null;
 
+    // Ambil token dari localStorage
+    const token = localStorage.getItem('token-FO');
+
     return {
         success: true,
         isLoggedIn: isLoggedIn,
         userName: userName,
         auctionUuid: auctionUuid,
+        passkey: passkey,
+        token: token ? token.substring(0, 20) + '...' : null, // Partial token untuk security
 
         // Timer
         countdown: countdownText,
@@ -199,11 +293,14 @@ function scrapeLotData() {
         serverDate: serverTimeDate,
 
         // URL
-        currentUrl: window.location.href
+        currentUrl: window.location.href,
+
+        // Timestamp
+        scrapedAt: new Date().toISOString()
     };
 }
 
-// Auto-refresh data setiap 5 detik jika ada listener
+// Auto-refresh data setiap 3 detik
 let lastLoginStatus = null;
 
 setInterval(() => {
@@ -218,14 +315,14 @@ setInterval(() => {
         }).catch(() => { });
     }
 
-    lastLoginStatus = data.isLoggedIn;
+    // lastLoginStatus = data.isLoggedIn;
 
-    chrome.runtime.sendMessage({
-        action: 'autoRefreshData',
-        data: data
-    }).catch(() => {
-        // Extension mungkin tidak listening, abaikan error
-    });
-}, 5000);
+    // chrome.runtime.sendMessage({
+    //     action: 'autoRefreshData',
+    //     data: data
+    // }).catch(() => {
+    //     // Extension mungkin tidak listening, abaikan error
+    // });
+}, 3000); // Setiap 3 detik untuk real-time
 
-console.log('Lelang.go.id content script loaded');
+console.log('Lelang.go.id content script loaded - Enhanced version');
