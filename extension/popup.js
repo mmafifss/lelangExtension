@@ -1,361 +1,47 @@
 // ============================================
-// popup.js - FINAL VERSION WITH LOGOUT DETECTION
+// popup.js - READY TO USE VERSION
+// Bot Username: @Lelangkpkbot
 // ============================================
 
 document.addEventListener('DOMContentLoaded', async () => {
     const statusDiv = document.getElementById('status');
     const lotInfo = document.getElementById('lotInfo');
-    const lotTitleEl = document.getElementById('lotTitle');
-    const lotPriceEl = document.getElementById('lotPrice');
-    const loginStatusEl = document.getElementById('loginStatus');
-    const lotCodeEl = document.getElementById('lotCode');
-    const kpknlEl = document.getElementById('kpknl');
-    const countdownEl = document.getElementById('countdown');
-    const nilaiLimitEl = document.getElementById('nilaiLimit');
-    const bidStatusEl = document.getElementById('bidStatus');
     const loadingStateEl = document.getElementById('loadingState');
 
-    // ===== VARIABEL GLOBAL =====
-    let countdownInterval = null;
-    let targetEndTime = null;
-    let loginCheckInterval = null;
-    let lastLoginStatus = null;
+    // Bot Telegram Username (sudah di-set)
+    const BOT_USERNAME = 'Lelangkpkbot';
 
-    // ===== FUNGSI HELPER =====
-    async function ensureContentScript(tabId) {
-        if (!chrome.scripting) return;
-        try {
-            await chrome.scripting.executeScript({
-                target: { tabId },
-                files: ['content.js']
-            });
-        } catch (error) {
-            console.error('Failed to inject content script:', error);
-        }
-    }
+    // Tambahkan section untuk data Telegram Bot
+    const telegramDataSection = document.createElement('div');
+    telegramDataSection.className = 'info-card';
+    telegramDataSection.style.backgroundColor = '#e3f2fd';
+    telegramDataSection.innerHTML = `
+        <h3 style="margin-bottom: 10px; color: #1976d2; font-size: 14px;">
+            📱 Data untuk Telegram Bot
+        </h3>
+        <div id="telegramData" style="font-size: 12px;">
+            <p style="margin: 5px 0;">⏳ Memuat data...</p>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 10px; flex-direction: column;">
+            <div style="display: flex; gap: 8px;">
+                <button id="copyCommands" class="button button-primary" style="flex: 1; font-size: 12px;">
+                    📋 Salin Command
+                </button>
+                <button id="refreshData" class="button button-primary" style="flex: 1; font-size: 12px; background: #4caf50;">
+                    🔄 Refresh
+                </button>
+            </div>
+            <button id="openTelegramBot" class="button button-primary" style="width: 100%; font-size: 13px; background: linear-gradient(135deg, #0088cc 0%, #005f8c 100%); padding: 12px;">
+                <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    <svg style="width: 18px; height: 18px; fill: white;" viewBox="0 0 24 24">
+                        <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
+                    </svg>
+                    <span>Buka Bot @${BOT_USERNAME}</span>
+                </div>
+            </button>
+        </div>
+    `;
 
-    function sendMessageWithRetry(tabId, payload, retries = 1) {
-        return new Promise((resolve) => {
-            chrome.tabs.sendMessage(tabId, payload, async (response) => {
-                if (chrome.runtime.lastError) {
-                    const message = chrome.runtime.lastError.message || 'Unknown error';
-
-                    if (retries > 0) {
-                        await ensureContentScript(tabId);
-                        setTimeout(() => {
-                            sendMessageWithRetry(tabId, payload, retries - 1).then(resolve);
-                        }, 200);
-                        return;
-                    }
-                    resolve({ error: message });
-                    return;
-                }
-                resolve(response);
-            });
-        });
-    }
-
-    function getCookie(url, name) {
-        return new Promise((resolve) => {
-            chrome.cookies.get({ url, name }, (cookie) => {
-                resolve(cookie || null);
-            });
-        });
-    }
-
-    function parseSessionCookie(value) {
-        if (!value) return null;
-        try {
-            const decoded = decodeURIComponent(value);
-            if (decoded.startsWith('{') || decoded.startsWith('[')) {
-                return JSON.parse(decoded);
-            }
-            return { raw: value };
-        } catch (err) {
-            return { raw: value };
-        }
-    }
-
-    function resolveLoginStatus(sessionData) {
-        if (!sessionData) return null;
-
-        if (typeof sessionData === 'object') {
-            if (sessionData.isLoggedIn !== undefined) {
-                return Boolean(sessionData.isLoggedIn);
-            }
-            if (sessionData.statusLogin !== undefined) {
-                return sessionData.statusLogin === true ||
-                    sessionData.statusLogin === 'true' ||
-                    sessionData.statusLogin === '1' ||
-                    sessionData.statusLogin === 1 ||
-                    sessionData.statusLogin === 'LOGIN';
-            }
-            if (sessionData.status !== undefined) {
-                return ['login', 'loggedin', 'active', 'true', '1', 'LOGIN']
-                    .includes(String(sessionData.status).toLowerCase());
-            }
-        }
-
-        if (typeof sessionData === 'string') {
-            const normalized = sessionData.toLowerCase();
-            if (['login', 'loggedin', 'true', '1', 'active'].includes(normalized)) {
-                return true;
-            }
-            return sessionData.length > 0;
-        }
-
-        if (sessionData.raw) {
-            const raw = sessionData.raw.toLowerCase();
-            if (['login', 'loggedin', 'true', '1', 'active'].includes(raw)) {
-                return true;
-            }
-            return sessionData.raw.length > 0;
-        }
-
-        return null;
-    }
-
-    async function getSessionInfo() {
-        const domainUrls = ['https://lelang.go.id/', 'https://www.lelang.go.id/'];
-        const cookieNames = ['cookiesSession', 'cookiesSession1', 'cookiesession1'];
-
-        for (const url of domainUrls) {
-            for (const name of cookieNames) {
-                const cookie = await getCookie(url, name);
-                if (cookie && cookie.value) {
-                    const data = parseSessionCookie(cookie.value);
-                    return { data, url, name };
-                }
-            }
-        }
-        return null;
-    }
-
-    async function updateStatusFromSession() {
-        const session = await getSessionInfo();
-        if (!session) {
-            return null;
-        }
-
-        const isLoggedIn = resolveLoginStatus(session.data);
-        let statusText = 'Terhubung';
-
-        if (session.data && typeof session.data === 'object') {
-            if (session.data.nama || session.data.username) {
-                statusText += ` sebagai ${session.data.nama || session.data.username}`;
-            }
-            if (session.data.statusMessage) {
-                statusText += ` ${session.data.statusMessage}`;
-            }
-        }
-
-        statusDiv.className = `status ${isLoggedIn ? 'connected' : 'disconnected'}`;
-
-        if (session.data && session.data.raw && session.data.raw.length > 8) {
-            const masked = `${session.data.raw.slice(0, 4)}…${session.data.raw.slice(-4)}`;
-            statusText += ` (ID ${masked})`;
-        }
-
-        statusDiv.textContent = isLoggedIn ? statusText : '⚠️ Belum Login (cookieSession tidak valid)';
-        loginStatusEl.textContent = isLoggedIn ? 'Sudah Login (via cookie)' : 'Belum Login';
-
-        return Boolean(isLoggedIn);
-    }
-
-    // ===== FUNGSI LOGOUT DETECTION (BARU!) =====
-    async function checkLoginStatus() {
-        try {
-            const session = await getSessionInfo();
-            const cookieLogin = session ? resolveLoginStatus(session.data) : false;
-
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab || !tab.url || !tab.url.includes('lelang.go.id/')) {
-                return null;
-            }
-
-            const response = await sendMessageWithRetry(tab.id, { action: 'getLotData' }, 1);
-            const pageLogin = response && !response.error ? Boolean(response.isLoggedIn) : false;
-
-            const currentLoginStatus = cookieLogin || pageLogin;
-
-            // 🚨 DETEKSI LOGOUT
-            if (lastLoginStatus === true && currentLoginStatus === false) {
-                handleLogout();
-            }
-
-            lastLoginStatus = currentLoginStatus;
-            return currentLoginStatus;
-
-        } catch (error) {
-            console.error('Error checking login status:', error);
-            return null;
-        }
-    }
-
-    function handleLogout() {
-        console.log('🚨 User logged out detected!');
-
-        // Update UI jadi merah
-        statusDiv.className = 'status disconnected';
-        statusDiv.textContent = '🚨 Anda Telah Logout!';
-        loginStatusEl.textContent = '❌ Sesi Berakhir';
-
-        // Sembunyikan data lelang
-        if (lotInfo) {
-            lotInfo.style.display = 'none';
-        }
-
-        // Tampilkan loading dengan pesan logout
-        if (loadingStateEl) {
-            loadingStateEl.style.display = 'block';
-            loadingStateEl.innerHTML = '<p style="color: #dc3545; font-weight: bold;">🚨 Sesi berakhir!<br>Silakan login kembali.</p>';
-        }
-
-        // Kirim notifikasi desktop
-        if (chrome.notifications) {
-            chrome.notifications.create({
-                type: 'basic',
-                iconUrl: 'icons/icon128.png',
-                title: '🚨 Logout Terdeteksi',
-                message: 'Sesi Anda telah berakhir. Silakan login kembali di lelang.go.id',
-                priority: 2
-            });
-        }
-
-        // Stop countdown timer
-        if (countdownInterval) {
-            clearInterval(countdownInterval);
-        }
-
-        // Stop login monitoring
-        if (loginCheckInterval) {
-            clearInterval(loginCheckInterval);
-        }
-
-        // Hapus data dari storage
-        if (chrome.storage && chrome.storage.local) {
-            chrome.storage.local.remove(['latestLotData']);
-        }
-    }
-
-    function startLoginMonitoring() {
-        // Cek login status setiap 10 detik
-        loginCheckInterval = setInterval(async () => {
-            await checkLoginStatus();
-        }, 10000); // 10 detik
-    }
-
-    // ===== FUNGSI COUNTDOWN TIMER =====
-    function parseCountdown(countdownText) {
-        if (!countdownText) return null;
-
-        const parts = countdownText.split(':').map(p => parseInt(p.replace(/\D/g, '')) || 0);
-        if (parts.length !== 4) return null;
-
-        const [days, hours, minutes, seconds] = parts;
-
-        const now = new Date();
-        const targetTime = new Date(now.getTime() +
-            (days * 24 * 60 * 60 * 1000) +
-            (hours * 60 * 60 * 1000) +
-            (minutes * 60 * 1000) +
-            (seconds * 1000)
-        );
-
-        return targetTime;
-    }
-
-    function startCountdown(initialCountdown) {
-        if (countdownInterval) {
-            clearInterval(countdownInterval);
-        }
-
-        targetEndTime = parseCountdown(initialCountdown);
-        if (!targetEndTime || !countdownEl) return;
-
-        countdownInterval = setInterval(() => {
-            const now = new Date();
-            const diff = targetEndTime - now;
-
-            if (diff <= 0) {
-                countdownEl.textContent = '00:00:00:00';
-                countdownEl.style.background = '#dc3545';
-                clearInterval(countdownInterval);
-                return;
-            }
-
-            const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-            const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-
-            const formatted =
-                String(days).padStart(2, '0') + ':' +
-                String(hours).padStart(2, '0') + ':' +
-                String(minutes).padStart(2, '0') + ':' +
-                String(seconds).padStart(2, '0');
-
-            countdownEl.textContent = formatted;
-
-            // Ubah warna jika < 10 menit
-            if (days === 0 && hours === 0 && minutes < 10) {
-                countdownEl.style.background = '#ffc107';
-            }
-        }, 1000);
-    }
-
-    // ===== FUNGSI UPDATE DISPLAY =====
-    function updateLotDisplay(response) {
-        if (loadingStateEl) {
-            loadingStateEl.style.display = 'none';
-        }
-
-        lotInfo.style.display = 'block';
-
-        lotTitleEl.textContent = response.title || 'Tidak diketahui';
-        lotPriceEl.textContent = response.currentPrice
-            ? `Rp ${response.currentPrice.toLocaleString('id-ID')}`
-            : '-';
-
-        if (lotCodeEl) {
-            lotCodeEl.textContent = response.kode || '-';
-        }
-
-        if (kpknlEl) {
-            kpknlEl.textContent = response.kpknl || '-';
-        }
-
-        if (countdownEl && response.countdown) {
-            countdownEl.textContent = response.countdown;
-            startCountdown(response.countdown);
-        }
-
-        if (nilaiLimitEl) {
-            nilaiLimitEl.textContent = response.nilaiLimitText ||
-                (response.nilaiLimit ? `Rp ${response.nilaiLimit.toLocaleString('id-ID')}` : '-');
-        }
-
-        if (bidStatusEl) {
-            if (response.isYourBid) {
-                bidStatusEl.textContent = '🎯 Anda Penawar Tertinggi!';
-                bidStatusEl.className = 'bid-status winning';
-            } else {
-                bidStatusEl.textContent = '⚠️ Ada penawar lain lebih tinggi';
-                bidStatusEl.className = 'bid-status losing';
-            }
-        }
-
-        console.log('Lot Data:', response);
-
-        if (chrome.storage && chrome.storage.local) {
-            chrome.storage.local.set({
-                latestLotData: response,
-                lastUpdate: new Date().toISOString()
-            });
-        }
-    }
-
-    // ===== INISIALISASI =====
     try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -373,85 +59,243 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
-        const cookieLogin = await updateStatusFromSession();
-        const response = await sendMessageWithRetry(tab.id, { action: 'getLotData' }, 2);
+        // Function untuk render data
+        async function renderData() {
+            // Ambil data dari content script
+            const response = await chrome.tabs.sendMessage(tab.id, { action: 'getLotData' });
 
-        if (response && !response.error) {
-            updateLotDisplay(response);
+            if (response && !response.error) {
+                // Update status
+                statusDiv.className = response.isLoggedIn ? 'status connected' : 'status disconnected';
+                statusDiv.textContent = response.isLoggedIn ?
+                    `✅ Terhubung${response.userName ? ' sebagai ' + response.userName : ''}` :
+                    '⚠️ Belum Login';
 
-            if (cookieLogin === null) {
-                const isLoggedIn = Boolean(response.isLoggedIn);
-                statusDiv.className = `status ${isLoggedIn ? 'connected' : 'disconnected'}`;
+                // Tampilkan info lot
+                if (lotInfo) {
+                    lotInfo.style.display = 'block';
 
-                if (isLoggedIn && response.userName) {
-                    statusDiv.textContent = `✅ Terhubung sebagai ${response.userName}`;
-                } else if (isLoggedIn) {
-                    statusDiv.textContent = '✅ Terhubung & Login';
-                } else {
-                    statusDiv.textContent = '⚠️ Belum Login';
+                    // Update lot info elements
+                    const lotTitleEl = document.getElementById('lotTitle');
+                    const lotPriceEl = document.getElementById('lotPrice');
+                    const lotCodeEl = document.getElementById('lotCode');
+                    const kpknlEl = document.getElementById('kpknl');
+                    const countdownEl = document.getElementById('countdown');
+                    const nilaiLimitEl = document.getElementById('nilaiLimit');
+                    const bidStatusEl = document.getElementById('bidStatus');
+                    const loginStatusEl = document.getElementById('loginStatus');
+
+                    if (lotTitleEl) lotTitleEl.textContent = response.title || 'Tidak diketahui';
+                    if (lotPriceEl) lotPriceEl.textContent = response.currentPrice
+                        ? `Rp ${response.currentPrice.toLocaleString('id-ID')}`
+                        : '-';
+                    if (lotCodeEl) lotCodeEl.textContent = response.kode || '-';
+                    if (kpknlEl) kpknlEl.textContent = response.kpknl || '-';
+                    if (countdownEl) countdownEl.textContent = response.countdown || '--:--:--:--';
+                    if (nilaiLimitEl) nilaiLimitEl.textContent = response.nilaiLimitText || '-';
+                    if (loginStatusEl) loginStatusEl.textContent = response.isLoggedIn ?
+                        '✅ Sudah Login' : '❌ Belum Login';
+
+                    if (bidStatusEl) {
+                        if (response.isYourBid) {
+                            bidStatusEl.textContent = '🎯 Anda Penawar Tertinggi!';
+                            bidStatusEl.className = 'bid-status winning';
+                        } else {
+                            bidStatusEl.textContent = '⚠️ Ada penawar lain lebih tinggi';
+                            bidStatusEl.className = 'bid-status losing';
+                        }
+                    }
+
+                    // ============================================
+                    // TAMPILKAN DATA TELEGRAM BOT
+                    // ============================================
+                    lotInfo.appendChild(telegramDataSection);
+
+                    const telegramDataEl = document.getElementById('telegramData');
+
+                    let telegramHTML = '<div style="line-height: 1.6;">';
+
+                    // 1. Cookies
+                    telegramHTML += '<div style="margin-bottom: 8px;">';
+                    telegramHTML += '<strong style="color: #1976d2;">1. Cookies:</strong><br>';
+                    if (response.cookies) {
+                        const cookiesShort = response.cookies.length > 50
+                            ? response.cookies.substring(0, 50) + '...'
+                            : response.cookies;
+                        telegramHTML += `<code style="font-size: 10px; background: #fff; padding: 2px 4px; border-radius: 3px;">${cookiesShort}</code>`;
+                        telegramHTML += '<br><span style="color: #4caf50; font-size: 11px;">✅ Tersedia</span>';
+                    } else {
+                        telegramHTML += '<span style="color: #f44336; font-size: 11px;">❌ Tidak ditemukan</span>';
+                    }
+                    telegramHTML += '</div>';
+
+                    // 2. Bearer Token
+                    telegramHTML += '<div style="margin-bottom: 8px;">';
+                    telegramHTML += '<strong style="color: #1976d2;">2. Bearer Token:</strong><br>';
+                    if (response.bearerToken) {
+                        const tokenShort = response.bearerToken.length > 30
+                            ? response.bearerToken.substring(0, 30) + '...'
+                            : response.bearerToken;
+                        telegramHTML += `<code style="font-size: 10px; background: #fff; padding: 2px 4px; border-radius: 3px;">${tokenShort}</code>`;
+                        telegramHTML += '<br><span style="color: #4caf50; font-size: 11px;">✅ Tersedia</span>';
+                    } else {
+                        telegramHTML += '<span style="color: #f44336; font-size: 11px;">❌ Tidak ditemukan</span>';
+                    }
+                    telegramHTML += '</div>';
+
+                    // 3. Auction ID
+                    telegramHTML += '<div style="margin-bottom: 8px;">';
+                    telegramHTML += '<strong style="color: #1976d2;">3. Auction ID:</strong><br>';
+                    if (response.auctionId) {
+                        telegramHTML += `<code style="font-size: 10px; background: #fff; padding: 2px 4px; border-radius: 3px;">${response.auctionId}</code>`;
+                        telegramHTML += '<br><span style="color: #4caf50; font-size: 11px;">✅ Tersedia</span>';
+                    } else {
+                        telegramHTML += '<span style="color: #f44336; font-size: 11px;">❌ Tidak ditemukan</span>';
+                    }
+                    telegramHTML += '</div>';
+
+                    // 4. Passkey (dengan status detection)
+                    telegramHTML += '<div style="margin-bottom: 8px;">';
+                    telegramHTML += '<strong style="color: #1976d2;">4. Passkey (PIN):</strong><br>';
+
+                    if (response.passkey) {
+                        telegramHTML += `<code style="font-size: 12px; background: #fff; padding: 2px 6px; border-radius: 3px; font-weight: bold;">${response.passkey}</code>`;
+                        telegramHTML += '<br><span style="color: #4caf50; font-size: 11px;">✅ Tersedia</span>';
+                    } else if (response.passkeyStatus === 'hidden') {
+                        telegramHTML += '<span style="color: #ff9800; font-size: 11px;">⚠️ PIN tersembunyi</span>';
+                        telegramHTML += '<br><button id="showPinBtn" style="margin-top: 5px; padding: 4px 8px; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">👁️ Klik Show PIN di Halaman</button>';
+                    } else {
+                        telegramHTML += '<span style="color: #f44336; font-size: 11px;">❌ Tidak ditemukan</span>';
+                        telegramHTML += '<br><span style="font-size: 10px; color: #666;">Scroll ke bawah halaman untuk melihat PIN Bidding</span>';
+                    }
+                    telegramHTML += '</div>';
+
+                    telegramHTML += '</div>';
+
+                    telegramDataEl.innerHTML = telegramHTML;
+
+                    // ============================================
+                    // EVENT LISTENER: SHOW PIN BUTTON
+                    // ============================================
+                    const showPinBtn = document.getElementById('showPinBtn');
+                    if (showPinBtn) {
+                        showPinBtn.addEventListener('click', async () => {
+                            showPinBtn.textContent = '🔄 Mencoba buka PIN...';
+                            showPinBtn.disabled = true;
+
+                            // Kirim message ke content script untuk klik show PIN
+                            const result = await chrome.tabs.sendMessage(tab.id, {
+                                action: 'clickShowPin'
+                            });
+
+                            if (result && result.success) {
+                                showPinBtn.textContent = '✅ Silakan refresh!';
+                                showPinBtn.style.backgroundColor = '#4caf50';
+
+                                // Auto refresh setelah 2 detik
+                                setTimeout(() => {
+                                    renderData();
+                                }, 2000);
+                            } else {
+                                showPinBtn.textContent = '❌ Gagal, klik manual di halaman';
+                                showPinBtn.style.backgroundColor = '#f44336';
+                                showPinBtn.disabled = false;
+                            }
+                        });
+                    }
+
+                    // ============================================
+                    // EVENT LISTENER: BUKA BOT TELEGRAM
+                    // ============================================
+                    const openTelegramBtn = document.getElementById('openTelegramBot');
+                    if (openTelegramBtn) {
+                        openTelegramBtn.addEventListener('click', () => {
+                            // Buka bot Telegram @Lelangkpkbot
+                            window.open(`https://t.me/${BOT_USERNAME}`, '_blank');
+                        });
+                    }
+
+                    // ============================================
+                    // TOMBOL COPY COMMANDS
+                    // ============================================
+                    const copyCommandsBtn = document.getElementById('copyCommands');
+                    if (copyCommandsBtn) {
+                        copyCommandsBtn.addEventListener('click', () => {
+                            let commands = '';
+
+                            if (response.cookies) {
+                                commands += `/setcookies ${response.cookies}\n\n`;
+                            }
+
+                            if (response.bearerToken) {
+                                commands += `/settoken ${response.bearerToken}\n\n`;
+                            }
+
+                            if (response.auctionId) {
+                                commands += `/setauction ${response.auctionId}\n\n`;
+                            }
+
+                            if (response.passkey) {
+                                commands += `/setPassBidding ${response.passkey}\n\n`;
+                            }
+
+                            if (commands) {
+                                navigator.clipboard.writeText(commands.trim()).then(() => {
+                                    const originalText = copyCommandsBtn.innerHTML;
+                                    copyCommandsBtn.innerHTML = '✅ Disalin!';
+                                    copyCommandsBtn.style.backgroundColor = '#4caf50';
+
+                                    setTimeout(() => {
+                                        copyCommandsBtn.innerHTML = originalText;
+                                        copyCommandsBtn.style.backgroundColor = '';
+                                    }, 2000);
+                                }).catch(err => {
+                                    console.error('Failed to copy:', err);
+                                    alert('Gagal menyalin. Silakan copy manual.');
+                                });
+                            } else {
+                                alert('Tidak ada data yang bisa disalin!');
+                            }
+                        });
+                    }
+
+                    // ============================================
+                    // TOMBOL REFRESH
+                    // ============================================
+                    const refreshBtn = document.getElementById('refreshData');
+                    if (refreshBtn) {
+                        refreshBtn.addEventListener('click', () => {
+                            const originalText = refreshBtn.innerHTML;
+                            refreshBtn.innerHTML = '🔄 Refreshing...';
+                            refreshBtn.disabled = true;
+
+                            renderData().then(() => {
+                                refreshBtn.innerHTML = originalText;
+                                refreshBtn.disabled = false;
+                            });
+                        });
+                    }
                 }
 
-                loginStatusEl.textContent = isLoggedIn ? '✅ Sudah Login' : '❌ Belum Login';
-                lastLoginStatus = isLoggedIn;
+                if (loadingStateEl) {
+                    loadingStateEl.style.display = 'none';
+                }
+
             } else {
-                lastLoginStatus = cookieLogin;
-            }
-
-            // 🚀 MULAI MONITORING LOGOUT
-            startLoginMonitoring();
-
-        } else if (response && response.error) {
-            console.error('Failed to get lot data:', response.error);
-            if (loadingStateEl) loadingStateEl.style.display = 'none';
-
-            if (cookieLogin === null) {
-                statusDiv.className = 'status disconnected';
-                statusDiv.textContent = `⚠️ Tidak dapat membaca status (${response.error})`;
-            }
-        } else {
-            if (loadingStateEl) loadingStateEl.style.display = 'none';
-
-            if (cookieLogin === null) {
-                lotInfo.style.display = 'block';
-                lotTitleEl.textContent = 'Tidak diketahui';
-                lotPriceEl.textContent = '-';
-                statusDiv.className = 'status disconnected';
-                statusDiv.textContent = '⚠️ Tidak dapat membaca status dari halaman';
+                statusDiv.textContent = '⚠️ Gagal mengambil data';
+                if (loadingStateEl) {
+                    loadingStateEl.style.display = 'none';
+                }
             }
         }
+
+        // Initial render
+        await renderData();
+
     } catch (error) {
         console.error('Popup initialization error:', error);
         statusDiv.className = 'status disconnected';
         statusDiv.textContent = '⚠️ Gagal memuat status';
         if (loadingStateEl) loadingStateEl.style.display = 'none';
     }
-
-    // ===== EVENT LISTENERS =====
-    const testBidBtn = document.getElementById('testBid');
-    if (testBidBtn) {
-        testBidBtn.addEventListener('click', async () => {
-            if (chrome.storage && chrome.storage.local) {
-                chrome.storage.local.get(['latestLotData'], (result) => {
-                    if (result.latestLotData) {
-                        console.log('Data untuk bot Telegram:', result.latestLotData);
-                        alert(`Extension aktif!\n\nLot: ${result.latestLotData.kode}\nHarga: Rp ${result.latestLotData.currentPrice?.toLocaleString('id-ID') || '-'}\n\nSekarang buka bot Telegram untuk bid.`);
-                    } else {
-                        alert('Extension aktif! Sekarang buka bot Telegram untuk bid.');
-                    }
-                });
-            } else {
-                alert('Extension aktif! Sekarang buka bot Telegram untuk bid.');
-            }
-        });
-    }
-
-    // ===== CLEANUP =====
-    window.addEventListener('unload', () => {
-        if (countdownInterval) {
-            clearInterval(countdownInterval);
-        }
-        if (loginCheckInterval) {
-            clearInterval(loginCheckInterval);
-        }
-    });
 });

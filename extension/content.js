@@ -1,5 +1,10 @@
 // ============================================
-// content.js (Content Script for Scraping) - ENHANCED VERSION
+// content.js (Content Script for Scraping) - ENHANCED VERSION WITH BETTER PASSKEY DETECTION
+// Scrapes data yang dibutuhkan untuk bot Telegram:
+// - Cookies session
+// - Bearer token
+// - Auction ID
+// - Passkey untuk bidding (dengan multiple detection methods)
 // ============================================
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -26,7 +31,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         return true; // Async response
     }
+
+    if (request.action === 'clickShowPin') {
+        try {
+            // Coba klik tombol show/hide PIN
+            clickShowPinButton();
+            sendResponse({ success: true });
+        } catch (error) {
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
+    }
 });
+
+// Function untuk klik tombol show PIN
+function clickShowPinButton() {
+    // Cari tombol eye icon untuk show/hide PIN
+    const pinSection = Array.from(document.querySelectorAll('.flex.flex-col.justify-center.gap-2'))
+        .find(el => {
+            const label = el.querySelector('p.font-medium');
+            return label && label.textContent.trim() === 'PIN Bidding';
+        });
+
+    if (pinSection) {
+        const eyeIcon = pinSection.querySelector('.pi-eye, .pi-eye-slash');
+        if (eyeIcon) {
+            eyeIcon.click();
+            console.log('✅ Clicked show PIN button');
+            return true;
+        }
+    }
+
+    console.log('⚠️ Show PIN button not found');
+    return false;
+}
 
 // Function untuk execute bid via API
 async function executeBidAPI(bidData) {
@@ -88,6 +126,101 @@ function scrapeLotData() {
         const element = document.querySelector(selector);
         return element ? element.textContent.trim() : null;
     };
+
+    // ============================================
+    // 1. AMBIL BEARER TOKEN dari localStorage
+    // ============================================
+    const bearerToken = localStorage.getItem('token-FO');
+
+    // ============================================
+    // 2. AMBIL COOKIES SESSION
+    // ============================================
+    const cookies = document.cookie;
+
+    // ============================================
+    // 3. AMBIL AUCTION ID dari URL
+    // ============================================
+    const urlMatch = window.location.href.match(/detail-open-bidding\/([a-f0-9-]+)/);
+    const auctionId = urlMatch ? urlMatch[1] : null;
+
+    // ============================================
+    // 4. AMBIL PASSKEY (PIN Bidding) - ENHANCED DETECTION
+    // ============================================
+    let passkey = null;
+    let passkeyStatus = 'not_found';
+
+    // Method 1: Dari section "PIN Bidding" yang visible (jika sudah di-show)
+    const pinBiddingSection = Array.from(document.querySelectorAll('.flex.flex-col.justify-center.gap-2'))
+        .find(el => {
+            const label = el.querySelector('p.font-medium');
+            return label && label.textContent.trim() === 'PIN Bidding';
+        });
+
+    if (pinBiddingSection) {
+        const valueContainer = pinBiddingSection.querySelector('.md\\:w-4\\/6, [class*="md:w-4/6"]');
+        if (valueContainer) {
+            const pinText = valueContainer.textContent.trim();
+            console.log('PIN Bidding text found:', pinText);
+
+            // Cek apakah PIN masih tersembunyi (4***** atau *****1 dll)
+            if (pinText.includes('*')) {
+                passkeyStatus = 'hidden';
+                console.log('⚠️ PIN masih tersembunyi, perlu klik tombol show');
+            } else {
+                // PIN sudah terlihat, extract angkanya
+                const match = pinText.match(/(\d{6})/);
+                if (match) {
+                    passkey = match[1];
+                    passkeyStatus = 'found';
+                    console.log('✅ PIN Bidding found (visible):', passkey);
+                }
+            }
+        }
+    }
+
+    // Method 2: Dari input field PIN (jika user sudah input)
+    if (!passkey) {
+        const pinInput = document.querySelector('#pin');
+        if (pinInput && pinInput.value && pinInput.value.length === 6) {
+            passkey = pinInput.value;
+            passkeyStatus = 'found_from_input';
+            console.log('✅ PIN found from input field:', passkey);
+        }
+    }
+
+    // Method 3: Coba dari disclosure panel yang expanded
+    if (!passkey) {
+        const disclosurePanels = document.querySelectorAll('[id^="headlessui-disclosure-panel"]');
+        disclosurePanels.forEach(panel => {
+            const text = panel.textContent;
+            if (text.includes('PIN Bidding')) {
+                // Cek apakah ada angka 6 digit yang tidak tersembunyi
+                const allMatches = text.match(/\b\d{6}\b/g);
+                if (allMatches && allMatches.length > 0) {
+                    // Ambil yang terakhir (biasanya PIN paling baru)
+                    passkey = allMatches[allMatches.length - 1];
+                    passkeyStatus = 'found_from_panel';
+                    console.log('✅ PIN found from disclosure panel:', passkey);
+                }
+            }
+        });
+    }
+
+    // Method 4: Dari data attribute atau hidden field
+    if (!passkey) {
+        const hiddenFields = document.querySelectorAll('input[type="hidden"]');
+        hiddenFields.forEach(field => {
+            if (field.name && field.name.toLowerCase().includes('pin') && field.value && field.value.length === 6) {
+                passkey = field.value;
+                passkeyStatus = 'found_from_hidden';
+                console.log('✅ PIN found from hidden field:', passkey);
+            }
+        });
+    }
+
+    // ============================================
+    // 5. AMBIL DATA LELANG LAINNYA
+    // ============================================
 
     // Ambil countdown timer
     const countdown = document.querySelector('.rounded-md.bg-ternary-green-100 .flex.items-center');
@@ -187,57 +320,6 @@ function scrapeLotData() {
         }
     });
 
-    // Scrape passkey dengan multiple methods
-    let passkey = null;
-
-    // Method 1: Dari PIN Bidding text
-    if (lotDetails.pinBidding) {
-        const pinMatch = lotDetails.pinBidding.match(/(\d{6})/);
-        if (pinMatch) {
-            passkey = pinMatch[1];
-        }
-    }
-
-    // Method 2: Dari disclosure panel
-    if (!passkey) {
-        const selectors = [
-            '#headlessui-disclosure-panel-\\:r8\\:',
-            '[id^="headlessui-disclosure-panel"]'
-        ];
-
-        for (const selector of selectors) {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(el => {
-                const text = el.textContent;
-                if (text.includes('PIN Bidding')) {
-                    const match = text.match(/(\d{6})/);
-                    if (match) {
-                        passkey = match[1];
-                    }
-                }
-            });
-            if (passkey) break;
-        }
-    }
-
-    // Method 3: Dari tombol "Salin PIN Bidding"
-    if (!passkey) {
-        const copyButton = Array.from(document.querySelectorAll('button'))
-            .find(btn => btn.textContent.includes('Salin PIN Bidding'));
-
-        if (copyButton) {
-            const parent = copyButton.closest('.flex.flex-col.justify-center.gap-2');
-            if (parent) {
-                const pinText = parent.textContent;
-                const match = pinText.match(/(\d{6})/);
-                if (match) {
-                    passkey = match[1];
-                }
-            }
-        }
-    }
-
-
     // Ambil waktu server
     const serverTimeHour = getText('.fixed.bottom-\\[5\\%\\].left-0 .font-bold');
     const serverTimeDate = getText('.fixed.bottom-\\[5\\%\\].left-0 .text-xs:last-child');
@@ -249,20 +331,20 @@ function scrapeLotData() {
     // Check login status
     const isLoggedIn = userName && userName !== 'LOGIN';
 
-    // Ambil UUID dari URL
-    const urlMatch = window.location.href.match(/detail-open-bidding\/([a-f0-9-]+)/);
-    const auctionUuid = urlMatch ? urlMatch[1] : null;
-
-    // Ambil token dari localStorage
-    const token = localStorage.getItem('token-FO');
-
+    // ============================================
+    // RETURN DATA LENGKAP UNTUK BOT TELEGRAM
+    // ============================================
     return {
         success: true,
         isLoggedIn: isLoggedIn,
         userName: userName,
-        auctionUuid: auctionUuid,
-        passkey: passkey,
-        token: token ? token.substring(0, 20) + '...' : null, // Partial token untuk security
+
+        // ✅ DATA PENTING UNTUK BOT TELEGRAM
+        auctionId: auctionId,           // Untuk /setauction
+        passkey: passkey,                // Untuk /setPassBidding
+        passkeyStatus: passkeyStatus,    // Status detection: found, hidden, not_found
+        bearerToken: bearerToken,        // Untuk /settoken
+        cookies: cookies,                // Untuk /setcookies
 
         // Timer
         countdown: countdownText,
@@ -300,8 +382,9 @@ function scrapeLotData() {
     };
 }
 
-// Auto-refresh data setiap 3 detik
+// Auto-refresh data setiap 3 detik dan kirim ke background
 let lastLoginStatus = null;
+let autoClickAttempted = false;
 
 setInterval(() => {
     const data = scrapeLotData();
@@ -315,14 +398,29 @@ setInterval(() => {
         }).catch(() => { });
     }
 
-    // lastLoginStatus = data.isLoggedIn;
+    // Auto-click show PIN jika masih hidden (hanya sekali)
+    if (!autoClickAttempted && data.passkeyStatus === 'hidden') {
+        console.log('🔄 Attempting to auto-click show PIN button...');
+        clickShowPinButton();
+        autoClickAttempted = true;
 
-    // chrome.runtime.sendMessage({
-    //     action: 'autoRefreshData',
-    //     data: data
-    // }).catch(() => {
-    //     // Extension mungkin tidak listening, abaikan error
-    // });
+        // Reset flag setelah 5 detik untuk retry
+        setTimeout(() => {
+            autoClickAttempted = false;
+        }, 5000);
+    }
+
+    lastLoginStatus = data.isLoggedIn;
+
+    // Kirim data ke background script
+    chrome.runtime.sendMessage({
+        action: 'autoRefreshData',
+        data: data
+    }).catch(() => {
+        // Extension mungkin tidak listening, abaikan error
+    });
 }, 3000); // Setiap 3 detik untuk real-time
 
-console.log('Lelang.go.id content script loaded - Enhanced version');
+console.log('✅ Lelang.go.id content script loaded - Enhanced version with auto PIN detection');
+console.log('📊 Auto-scraping: Bearer Token, Cookies, Auction ID, Passkey');
+console.log('🔍 Passkey auto-detection with multiple methods');

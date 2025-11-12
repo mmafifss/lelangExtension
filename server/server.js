@@ -453,7 +453,7 @@ bot.onText(/\/bid (.+)/, async (msg, match) => {
 // Command: /monitor - Start monitoring
 bot.onText(/\/monitor/, async (msg) => {
     const chatId = msg.chat.id;
-    await startMonitoring(chatId);
+    await startSmartMonitoring(chatId);
 });
 
 // Command: /stopmonitor - Stop monitoring
@@ -496,7 +496,7 @@ bot.on('callback_query', async (callbackQuery) => {
             await handleBidKelipatan(chatId);
             break;
         case 'start_monitor':
-            await startMonitoring(chatId);
+            await startSmartMonitoring(chatId);
             break;
         case 'stop_monitor':
             stopMonitoring(chatId);
@@ -783,7 +783,7 @@ ${session.passBidding ? '✅ Sudah di-set' : '❌ Belum di-set - gunakan `/setPa
     });
 }
 
-async function startMonitoring(chatId) {
+async function startSmartMonitoring(chatId) {
     const session = userSessions.get(chatId);
 
     if (!session || !session.auctionId) {
@@ -798,44 +798,123 @@ async function startMonitoring(chatId) {
 
     let lastPrice = null;
     let lastStatus = null;
+    let currentInterval = 3000; // Start dengan 3 detik
 
-    const monitorInterval = setInterval(async () => {
-        const statusResult = await fetchAuctionStatus(
-            session.auctionId,
-            session.cookies,
-            session.bearerToken
-        );
+    async function monitorLoop() {
+        try {
+            // Get status to check time remaining
+            const statusResult = await fetchAuctionStatus(
+                session.auctionId,
+                session.cookies,
+                session.bearerToken
+            );
 
-        if (statusResult.success && statusResult.data && statusResult.data.data) {
-            const data = statusResult.data.data;
-            const currentStatus = data.status?.statusLelang;
+            if (statusResult.success && statusResult.data && statusResult.data.data) {
+                const data = statusResult.data.data;
+                const lot = data?.lotLelang;
 
-            // Monitor perubahan status lelang
-            if (currentStatus && currentStatus !== lastStatus) {
-                bot.sendMessage(chatId, `🔔 *Perubahan Status Lelang!*\n\nStatus Baru: ${currentStatus}`, {
-                    parse_mode: 'Markdown'
-                });
-                lastStatus = currentStatus;
+                // Calculate time remaining
+                if (lot?.tglSelesaiLelang) {
+                    const endTime = new Date(lot.tglSelesaiLelang);
+                    const now = new Date();
+                    const timeRemaining = endTime - now;
+                    const minutesRemaining = Math.floor(timeRemaining / 1000 / 60);
+
+                    // Adjust interval based on time remaining
+                    if (minutesRemaining <= 5) {
+                        currentInterval = 1000; // 1 detik untuk 5 menit terakhir
+                    } else if (minutesRemaining <= 15) {
+                        currentInterval = 2000; // 2 detik untuk 15 menit terakhir
+                    } else if (minutesRemaining <= 60) {
+                        currentInterval = 3000; // 3 detik untuk 1 jam terakhir
+                    } else {
+                        currentInterval = 5000; // 5 detik untuk sisanya
+                    }
+                }
+
+                // Check status
+                const currentStatus = data.status?.statusLelang;
+                if (currentStatus && currentStatus !== lastStatus) {
+                    bot.sendMessage(chatId, `🔔 *Perubahan Status!*\n\nStatus: ${currentStatus}`, {
+                        parse_mode: 'Markdown'
+                    });
+                    lastStatus = currentStatus;
+                }
+
+                // Check if ended
+                if (currentStatus && (currentStatus.toLowerCase().includes('selesai') ||
+                    currentStatus.toLowerCase().includes('berakhir'))) {
+                    bot.sendMessage(chatId, '🏁 *Lelang Berakhir!*', { parse_mode: 'Markdown' });
+                    stopMonitoring(chatId);
+                    return;
+                }
             }
 
-            // Monitor jika ada data bidding (untuk penawaran)
-            // Note: Data ini mungkin perlu disesuaikan dengan struktur response API bidding
-        }
-    }, 10000); // Check setiap 10 detik
+            // Monitor bid history
+            const historyResult = await fetchBidHistory(
+                session.auctionId,
+                session.cookies,
+                session.bearerToken
+            );
 
+            if (historyResult.success && historyResult.data && historyResult.data.data) {
+                let riwayat = historyResult.data.data;
+                if (riwayat.data && Array.isArray(riwayat.data)) {
+                    riwayat = riwayat.data;
+                }
+
+                if (Array.isArray(riwayat) && riwayat.length > 0) {
+                    const latestBid = riwayat[0];
+                    const currentPrice = parseInt(latestBid.bidAmount);
+
+                    if (currentPrice !== lastPrice && lastPrice !== null) {
+                        const priceDiff = currentPrice - lastPrice;
+                        bot.sendMessage(chatId,
+                            `🚨 *Penawaran Baru!*\n\n` +
+                            `Harga: Rp ${currentPrice.toLocaleString('id-ID')}\n` +
+                            `Naik: Rp ${priceDiff.toLocaleString('id-ID')}\n` +
+                            `Penawar: ${latestBid.bidderName || 'Unknown'}`,
+                            {
+                                parse_mode: 'Markdown',
+                                reply_markup: {
+                                    inline_keyboard: [
+                                        [{ text: "💰 Bid Kelipatan", callback_data: "bid_kelipatan" }]
+                                    ]
+                                }
+                            }
+                        );
+                    }
+                    lastPrice = currentPrice;
+                }
+            }
+
+        } catch (error) {
+            console.error('Smart monitoring error:', error);
+        }
+
+        // Schedule next check with current interval
+        const monitoring = activeMonitoring.get(chatId);
+        if (monitoring) {
+            monitoring.timeout = setTimeout(monitorLoop, currentInterval);
+        }
+    }
+
+    // Start monitoring
     activeMonitoring.set(chatId, {
         auctionId: session.auctionId,
-        interval: monitorInterval
+        timeout: setTimeout(monitorLoop, currentInterval)
     });
 
-    bot.sendMessage(chatId, '✅ *Monitoring Aktif!*\n\nAnda akan menerima notifikasi jika ada perubahan status.\n\nGunakan /stopmonitor untuk menghentikan.', {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "🛑 Stop Monitor", callback_data: "stop_monitor" }]
-            ]
-        }
-    });
+    bot.sendMessage(chatId,
+        '✅ *Smart Monitoring Aktif!*\n\n' +
+        '🎯 Interval otomatis:\n' +
+        '• >1 jam: 5 detik\n' +
+        '• 15-60 menit: 3 detik\n' +
+        '• 5-15 menit: 2 detik\n' +
+        '• <5 menit: 1 detik\n\n' +
+        'Gunakan /stopmonitor untuk stop.',
+        { parse_mode: 'Markdown' }
+    );
 }
 
 function stopMonitoring(chatId) {
@@ -846,7 +925,14 @@ function stopMonitoring(chatId) {
         return;
     }
 
-    clearInterval(monitoring.interval);
+    // Clear interval or timeout
+    if (monitoring.interval) {
+        clearInterval(monitoring.interval);
+    }
+    if (monitoring.timeout) {
+        clearTimeout(monitoring.timeout);
+    }
+
     activeMonitoring.delete(chatId);
 
     bot.sendMessage(chatId, '✅ Monitoring dihentikan.');
