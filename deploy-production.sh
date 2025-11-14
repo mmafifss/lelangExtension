@@ -17,7 +17,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-APP_NAME="lelangbot"
+APP_NAME="lelangExtension"
 APP_DIR="/var/www/${APP_NAME}"
 NGINX_CONF="/etc/nginx/sites-available/${APP_NAME}"
 DOMAIN="lelangbot.com"
