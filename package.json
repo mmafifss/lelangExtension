@@ -9,7 +9,18 @@
     "start-server": "cd server && npm start",
     "dev-server": "cd server && npm run dev",
     "build": "echo \"No build process needed\"",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "pm2:start": "pm2 start ecosystem.config.js --env production",
+    "pm2:stop": "pm2 stop lelang-bot",
+    "pm2:restart": "pm2 restart lelang-bot",
+    "pm2:reload": "pm2 reload lelang-bot",
+    "pm2:delete": "pm2 delete lelang-bot",
+    "pm2:logs": "pm2 logs lelang-bot",
+    "pm2:monit": "pm2 monit",
+    "pm2:status": "pm2 status",
+    "deploy:setup": "pm2 deploy production setup",
+    "deploy:prod": "pm2 deploy production",
+    "deploy:staging": "pm2 deploy staging"
   },
   "keywords": [
     "lelang",

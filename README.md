@@ -1,189 +1,265 @@
-# Sistem Bid Lelang.go.id dengan Chrome Extension & Bot Telegram
+# 📦 Production Deployment Files
 
-Sistem lengkap untuk melakukan bid otomatis di lelang.go.id melalui bot Telegram dengan Chrome extension.
-
-## 🚀 Fitur
-
-- ✅ Bid otomatis melalui bot Telegram
-- ✅ Monitoring harga real-time
-- ✅ Deteksi login status
-- ✅ Error handling yang robust
-- ✅ Interface popup untuk monitoring
-- ✅ Struktur project yang terorganisir
-
-## 📁 Struktur Project
+## 📁 File Structure
 
 ```
 lelangExtension/
-├── extension/                 # Chrome Extension
-│   ├── manifest.json         # Konfigurasi extension
-│   ├── background.js         # Service worker
-│   ├── content.js           # Script untuk halaman lelang
-│   ├── popup.html          # Interface popup
-│   ├── popup.js            # Logic popup
-│   └── package.json        # Dependencies extension
-├── server/                   # Backend Server
-│   ├── server.js           # Main server file
-│   ├── config.env          # Konfigurasi bot token
-│   └── package.json        # Dependencies server
-├── package.json            # Root package.json
-├── setup.sh               # Script setup otomatis
-├── .gitignore             # Git ignore rules
-└── README.md              # Dokumentasi
+├── ecosystem.config.js          # PM2 configuration
+├── package.json                 # Updated with PM2 scripts
+├── nginx-lelangbot.conf        # Nginx configuration
+├── config.env.production       # Production environment template
+├── deploy-production.sh        # Main deployment script
+├── update.sh                   # Quick update script
+├── health-check.sh             # Health monitoring script
+├── crontab-config.txt          # Cron jobs configuration
+├── security-hardening.sh       # Security setup script
+├── DEPLOYMENT_GUIDE.md         # Comprehensive guide
+├── Dockerfile                  # Docker configuration (optional)
+├── docker-compose.yml          # Docker Compose (optional)
+└── (existing project files...)
 ```
 
-## 📋 Prerequisites
+## 🚀 Quick Start
 
-1. **Node.js** (versi 14 atau lebih baru)
-2. **Bot Telegram** (dari @BotFather)
-3. **Chrome Browser**
+### Traditional PM2 Deployment (Recommended)
 
-## 🛠️ Instalasi Cepat
+1. **Prepare your VPS:**
+   ```bash
+   ssh root@YOUR_SERVER_IP
+   ```
 
-### Opsi 1: Setup Otomatis
+2. **Upload files:**
+   ```bash
+   scp -r lelangExtension/* root@YOUR_SERVER_IP:/var/www/lelangbot/
+   ```
+
+3. **Run deployment:**
+   ```bash
+   cd /var/www/lelangbot
+   chmod +x *.sh
+   sudo ./deploy-production.sh
+   ```
+
+4. **Follow the prompts and wait for completion**
+
+## 📋 Pre-Deployment Checklist
+
+- [ ] VPS purchased (recommended specs: 2 CPU, 4GB RAM)
+- [ ] Domain registered and DNS configured
+- [ ] Telegram Bot Token obtained
+- [ ] SSH access configured
+- [ ] All files uploaded to server
+
+## 🔧 Configuration Files
+
+### 1. ecosystem.config.js
+PM2 process manager configuration with:
+- Cluster mode
+- Auto-restart
+- Log rotation
+- Memory management
+
+### 2. nginx-lelangbot.conf
+Nginx reverse proxy with:
+- SSL/TLS configuration
+- Rate limiting
+- Security headers
+- Load balancing
+
+### 3. config.env.production
+Environment variables template. **Copy to `server/config.env` and fill in:**
+- BOT_TOKEN
+- DOMAIN
+- EMAIL
+- etc.
+
+### 4. Scripts
+
+**deploy-production.sh** - Full deployment
+- System setup
+- Dependencies installation
+- Service configuration
+- SSL setup
+
+**update.sh** - Quick code updates
+- Git pull
+- npm install
+- PM2 reload
+
+**health-check.sh** - Monitoring
+- Process check
+- Health endpoint test
+- Alert on failure
+
+**security-hardening.sh** - Security setup
+- SSH hardening
+- Fail2Ban
+- Firewall
+- Kernel tuning
+
+## 📖 Documentation
+
+Read **DEPLOYMENT_GUIDE.md** for:
+- Step-by-step instructions
+- Troubleshooting guide
+- Maintenance procedures
+- Performance optimization
+- Cost estimation
+
+## 🎯 Deployment Options
+
+### Option 1: VPS Recommendations
+
+**Production (High Reliability):**
+- Provider: DigitalOcean
+- Plan: Premium Intel $24/month
+- Specs: 2 vCPU, 4GB RAM, 80GB SSD
+- Region: Singapore
+
+**Budget (Good Value):**
+- Provider: Contabo
+- Plan: VPS M €7.99/month
+- Specs: 4 vCPU, 8GB RAM, 200GB SSD
+- Region: Singapore
+
+**Enterprise (Mission Critical):**
+- Provider: AWS EC2 or Google Cloud
+- Plan: t3.medium or equivalent
+- Specs: 2 vCPU, 4GB RAM + Auto Scaling
+- Region: ap-southeast-1 (Singapore)
+
+### Option 2: Domain Providers
+
+- **Namecheap**: $8.88/year (.com)
+- **Cloudflare**: At-cost pricing + free DNS
+- **Niagahoster**: Rp 125.000/year (.id)
+
+## 🔐 Security Features
+
+- ✅ SSL/TLS encryption (Let's Encrypt)
+- ✅ Firewall (UFW)
+- ✅ Fail2Ban (intrusion prevention)
+- ✅ Automatic security updates
+- ✅ Rate limiting
+- ✅ Secure headers
+- ✅ Non-root execution
+
+## 📊 Monitoring & Alerts
+
+- ✅ PM2 monitoring
+- ✅ Health check endpoint
+- ✅ Automated health checks (cron)
+- ✅ Email alerts on failure
+- ✅ Log rotation
+- ✅ Resource monitoring
+
+## 🔄 Maintenance
+
+### Daily
 ```bash
-# Clone atau download project
-cd lelangExtension
-
-# Jalankan script setup
-./setup.sh
+pm2 status
+pm2 logs lelangbot --lines 50
 ```
 
-### Opsi 2: Setup Manual
-
-#### 1. Setup Bot Telegram
-1. Buka Telegram dan cari `@BotFather`
-2. Kirim `/newbot` dan ikuti instruksi
-3. Simpan token bot yang diberikan
-
-#### 2. Setup Server
+### Weekly
 ```bash
-# Install dependencies server
-cd server
-npm install
-
-# Edit file config.env
-# Ganti 'your_bot_token_here' dengan token bot Anda
-BOT_TOKEN='your_bot_token_here'
-PORT=3000
-
-# Jalankan server
-npm start
+apt-get update && apt-get upgrade
+certbot renew --dry-run
 ```
 
-#### 3. Install Chrome Extension
-1. Buka Chrome dan pergi ke `chrome://extensions/`
-2. Aktifkan "Developer mode" (toggle di kanan atas)
-3. Klik "Load unpacked"
-4. Pilih folder `extension/`
-5. Extension akan muncul di toolbar Chrome
-
-## 📱 Cara Penggunaan
-
-### 1. Setup Awal
-
-1. **Jalankan server**: `npm run start-server` (dari root) atau `cd server && npm start`
-2. **Buka lelang.go.id** di browser
-3. **Login** ke akun Anda
-4. **Buka halaman lelang** yang ingin di-bid
-5. **Klik icon extension** untuk cek status
-
-### 2. Menggunakan Bot Telegram
-
-1. **Cari bot Anda** di Telegram
-2. **Kirim `/start`** untuk memulai
-3. **Kirim `/help`** untuk melihat perintah
-
-### 3. Perintah Bot
-
-```
-/bid <lot_id> <amount>
-```
-Contoh: `/bid 12345 1000000`
-
-```
-/status
-```
-Cek status tab browser yang terhubung
-
-```
-/help
-```
-Tampilkan bantuan
-
-## 🔧 Troubleshooting
-
-### Server tidak bisa start
-- Pastikan port 3000 tidak digunakan aplikasi lain
-- Cek apakah BOT_TOKEN sudah benar di `server/config.env`
-- Jalankan `cd server && npm install` untuk install dependencies
-
-### Error: "409 Conflict: terminated by other getUpdates request"
-- **Penyebab**: Ada multiple instance bot yang berjalan bersamaan
-- **Solusi**: 
-  ```bash
-  # Gunakan script yang sudah diperbaiki
-  ./start.sh    # Otomatis stop instance lama
-  
-  # Atau stop manual
-  ./stop.sh     # Stop semua instance
-  pkill -f "node server.js"  # Force stop
-  ```
-
-### Extension tidak terhubung
-- Pastikan server sudah running (`npm run start-server`)
-- Cek apakah sudah login di lelang.go.id
-- Refresh halaman lelang
-- Pastikan extension di-load dari folder `extension/`
-
-### Bid gagal
-- Pastikan sudah login
-- Cek apakah nominal bid valid
-- Pastikan halaman lelang masih aktif
-- Cek console browser untuk error messages
-
-## 🚀 Perintah yang Tersedia
-
-### Script Otomatis (Recommended)
+### Monthly
 ```bash
-./start.sh    # Start server dengan auto-stop instance lama
-./stop.sh     # Stop semua instance server
-./setup.sh    # Setup dependencies
+./backup.sh
+lynis audit system
 ```
 
-### Perintah NPM
+## 🆘 Support
+
+### Common Issues
+
+**Bot not responding:**
 ```bash
-# Dari root directory
-npm run start-server    # Jalankan server
-npm run dev-server      # Jalankan server dengan nodemon
-npm run install-all     # Install semua dependencies
-npm run install-server  # Install dependencies server saja
-npm run install-extension # Install dependencies extension saja
-
-# Dari server directory
-cd server
-npm start              # Jalankan server
-npm run dev            # Jalankan dengan nodemon
+pm2 restart lelangbot
+pm2 logs lelangbot
 ```
 
-### Perintah Manual
+**SSL issues:**
 ```bash
-# Stop server manual
-pkill -f "node server.js"        # Stop semua instance
-pkill -9 -f "node server.js"     # Force stop
-
-# Cek instance yang berjalan
-ps aux | grep "node server.js" | grep -v grep
+certbot renew
+systemctl reload nginx
 ```
 
-## ⚠️ Disclaimer
+**High memory:**
+```bash
+pm2 reload lelangbot
+pm2 monit
+```
 
-Extension ini dibuat untuk keperluan edukasi dan testing. Penggunaan untuk tujuan komersial atau ilegal adalah tanggung jawab pengguna sendiri.
+### Getting Help
 
-## 🐛 Bug Report
+1. Check logs: `pm2 logs lelangbot`
+2. Review error.log: `tail -100 /var/log/nginx/error.log`
+3. Check system: `htop` or `top`
+4. Review documentation: DEPLOYMENT_GUIDE.md
 
-Jika menemukan bug atau masalah, silakan buat issue di repository ini.
+## 💰 Estimated Costs
 
-## 📄 License
+**Minimum Setup:**
+- VPS: $8.5/month (Contabo)
+- Domain: $1/month (.com annual)
+- SSL: FREE (Let's Encrypt)
+- **Total: ~$10/month**
 
-MIT License
+**Recommended Setup:**
+- VPS: $24/month (DigitalOcean)
+- Domain: $1/month
+- Monitoring: FREE (Uptime Robot)
+- Backups: $1/month (DO Backups)
+- **Total: ~$26/month**
+
+**Enterprise Setup:**
+- VPS: $50-100/month (AWS/GCP)
+- Domain: $1/month
+- Monitoring: $29/month (New Relic)
+- CDN: $20/month (Cloudflare Pro)
+- **Total: ~$100-150/month**
+
+## ✅ Post-Deployment
+
+After successful deployment:
+
+1. ✅ Test bot: Send `/start` in Telegram
+2. ✅ Setup monitoring: Uptime Robot
+3. ✅ Configure backups: Run backup.sh
+4. ✅ Setup alerts: Email/SMS notifications
+5. ✅ Document access: Save credentials securely
+6. ✅ Schedule maintenance: Weekly check-ins
+
+## 🚨 Emergency Contacts
+
+- VPS Support: support@YOUR_PROVIDER.com
+- Domain Support: support@YOUR_REGISTRAR.com
+- Development Team: YOUR_EMAIL
+
+## 📞 Need Help?
+
+For deployment assistance:
+- Read: DEPLOYMENT_GUIDE.md
+- Check: PM2 docs (pm2.keymetrics.io)
+- Search: Stack Overflow
+- Contact: YOUR_SUPPORT_EMAIL
+
+---
+
+## 🎉 Ready to Deploy!
+
+Your production-ready Lelang Bot system is prepared with:
+- ✅ Professional configuration
+- ✅ Security hardening
+- ✅ Automated monitoring
+- ✅ Comprehensive documentation
+- ✅ Scalable architecture
+
+Follow DEPLOYMENT_GUIDE.md for step-by-step instructions.
+
+Good luck! 🚀
