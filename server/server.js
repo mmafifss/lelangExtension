@@ -1,12 +1,14 @@
 // ============================================
-// server-api-direct.js - Direct API Integration
-// Sistem bid langsung ke API lelang.go.id
+// server-api-direct-fixed.js - Direct API Integration (FIXED)
+// Sistem bid langsung ke API lelang.go.id dengan perbaikan timeout
 // ============================================
 
 require('dotenv').config({ path: './config.env' });
 const express = require('express');
 const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
+const https = require('https');
 
 const app = express();
 app.use(cors());
@@ -28,6 +30,43 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 });
 
 // ============================================
+// AXIOS CONFIGURATION
+// ============================================
+
+// Create axios instance dengan custom config
+const axiosInstance = axios.create({
+    timeout: 30000, // 30 detik timeout
+    httpsAgent: new https.Agent({
+        rejectUnauthorized: false, // Allow self-signed certs jika ada
+        keepAlive: true,
+        keepAliveMsecs: 1000
+    }),
+    headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+        'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"'
+    }
+});
+
+// Retry logic untuk axios
+const axiosRetry = async (config, maxRetries = 3) => {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            const response = await axiosInstance(config);
+            return response;
+        } catch (error) {
+            console.log(`Attempt ${i + 1} failed:`, error.message);
+            if (i === maxRetries - 1) throw error;
+            // Wait before retry (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+        }
+    }
+};
+
+// ============================================
 // STORAGE & STATE MANAGEMENT
 // ============================================
 
@@ -47,14 +86,8 @@ const activeMonitoring = new Map(); // chatId -> { auctionId, interval }
 async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
     try {
         const headers = {
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
             'Origin': 'https://lelang.go.id',
-            'Referer': 'https://lelang.go.id/',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"macOS"',
+            'Referer': 'https://lelang.go.id/'
         };
 
         if (cookies) {
@@ -65,19 +98,22 @@ async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
             headers['Authorization'] = `Bearer ${bearerToken}`;
         }
 
-        const response = await fetch(
-            `https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/${auctionId}/riwayat`,
-            { headers, method: "GET" }
-        );
+        console.log(`📡 Fetching bid history for auction: ${auctionId}`);
 
-        if (!response.ok) {
-            throw new Error(`API returned ${response.status}: ${response.statusText}`);
-        }
+        const response = await axiosRetry({
+            method: 'GET',
+            url: `https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/${auctionId}/riwayat`,
+            headers: headers
+        });
 
-        const data = await response.json();
-        return { success: true, data };
+        console.log('✅ Bid history fetched successfully');
+        return { success: true, data: response.data };
     } catch (error) {
-        console.error('Error fetching bid history:', error);
+        console.error('❌ Error fetching bid history:', error.message);
+        if (error.response) {
+            console.error('Response status:', error.response.status);
+            console.error('Response data:', error.response.data);
+        }
         return { success: false, error: error.message };
     }
 }
@@ -88,15 +124,8 @@ async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
 async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null) {
     try {
         const headers = {
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Authorization': `Bearer ${bearerToken}`,
             'Origin': 'https://lelang.go.id',
-            'Referer': 'https://lelang.go.id/',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"macOS"',
+            'Referer': 'https://lelang.go.id/'
         };
 
         if (cookies) {
@@ -107,19 +136,22 @@ async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null)
             headers['Authorization'] = `Bearer ${bearerToken}`;
         }
 
-        const response = await fetch(
-            `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`,
-            { headers, method: "GET" }
-        );
+        console.log(`📡 Fetching auction status for: ${auctionId}`);
 
-        if (!response.ok) {
-            throw new Error(`API returned ${response.status}: ${response.statusText}`);
-        }
+        const response = await axiosRetry({
+            method: 'GET',
+            url: `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`,
+            headers: headers
+        });
 
-        const data = await response.json();
-        return { success: true, data };
+        console.log('✅ Auction status fetched successfully');
+        return { success: true, data: response.data };
     } catch (error) {
-        console.error('Error fetching auction status:', error);
+        console.error('❌ Error fetching auction status:', error.message);
+        if (error.response) {
+            console.error('Response status:', error.response.status);
+            console.error('Response data:', error.response.data);
+        }
         return { success: false, error: error.message };
     }
 }
@@ -131,14 +163,8 @@ async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
     try {
         const headers = {
             'Content-Type': 'application/json',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
             'Origin': 'https://lelang.go.id',
-            'Referer': 'https://lelang.go.id/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"macOS"'
+            'Referer': 'https://lelang.go.id/'
         };
 
         if (bearerToken) {
@@ -152,31 +178,23 @@ async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
         console.log('=== Starting Bid Process ===');
         console.log('Auction ID:', auctionId);
         console.log('Amount:', amount);
-        console.log('Passkey:', passkey);
+        console.log('Passkey:', passkey ? '***' : 'NOT SET');
 
         // 1. Mulai sesi bid
         const startSessionPayload = {
-            auctionId: String(auctionId) // Pastikan string
+            auctionId: String(auctionId)
         };
 
-        console.log('Start session payload:', JSON.stringify(startSessionPayload));
+        console.log('📤 Starting bid session...');
 
-        const startSessionResponse = await fetch(
-            'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/mulai-sesi',
-            {
-                method: 'POST',
-                headers: headers,
-                body: JSON.stringify(startSessionPayload)
-            }
-        );
+        const startSessionResponse = await axiosRetry({
+            method: 'POST',
+            url: 'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/mulai-sesi',
+            headers: headers,
+            data: startSessionPayload
+        });
 
-        const startSessionText = await startSessionResponse.text();
-        console.log('Start session response status:', startSessionResponse.status);
-        console.log('Start session response:', startSessionText);
-
-        if (!startSessionResponse.ok) {
-            throw new Error(`Failed to start session: ${startSessionResponse.status} - ${startSessionText}`);
-        }
+        console.log('✅ Session started:', startSessionResponse.status);
 
         // 2. Kirim bid
         const bidPayload = {
@@ -186,30 +204,26 @@ async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
             passkey: String(passkey)
         };
 
-        console.log('Bid payload:', JSON.stringify(bidPayload));
+        console.log('📤 Sending bid...');
 
-        const bidResponse = await fetch(
-            'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/pengajuan-penawaran',
-            {
-                method: 'POST',
-                headers: headers,
-                body: JSON.stringify(bidPayload)
-            }
-        );
+        const bidResponse = await axiosRetry({
+            method: 'POST',
+            url: 'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/pengajuan-penawaran',
+            headers: headers,
+            data: bidPayload
+        });
 
-        const bidText = await bidResponse.text();
-        console.log('Bid response status:', bidResponse.status);
-        console.log('Bid response:', bidText);
+        console.log('✅ Bid sent successfully:', bidResponse.status);
+        console.log('Response:', bidResponse.data);
 
-        if (!bidResponse.ok) {
-            throw new Error(`Bid failed: ${bidResponse.status} - ${bidText}`);
-        }
-
-        const result = JSON.parse(bidText);
-        return { success: true, result };
+        return { success: true, result: bidResponse.data };
 
     } catch (error) {
-        console.error('Error sending bid:', error);
+        console.error('❌ Error sending bid:', error.message);
+        if (error.response) {
+            console.error('Response status:', error.response.status);
+            console.error('Response data:', error.response.data);
+        }
         return { success: false, error: error.message };
     }
 }
@@ -298,17 +312,19 @@ bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     const firstName = msg.from.first_name || 'User';
 
-    const welcomeMessage = `🎉 *Selamat datang di Lelang Bid Bot (API Direct)!*
+    const welcomeMessage = `🎉 *Selamat datang di Lelang Bid Bot (API Direct - FIXED)!*
 
 Halo ${firstName}! 👋
 
 Bot ini terhubung langsung ke API lelang.go.id untuk bid otomatis.
+✨ *NEW: Fixed connection timeout issues!*
 
 *🚀 Fitur:*
 • Cek status lelang real-time
 • Bid langsung via API
 • Monitoring otomatis
 • Notifikasi perubahan harga
+• Auto-retry & better error handling
 
 *📱 Setup Cepat:*
 1. Set cookies: \`/setcookies <cookies>\`
@@ -468,6 +484,30 @@ bot.onText(/\/help/, (msg) => {
     handleHelp(chatId);
 });
 
+// Command: /testconnection - Test koneksi ke API
+bot.onText(/\/testconnection/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    bot.sendMessage(chatId, '🔍 Testing connection to API lelang.go.id...\n\nThis may take a moment...');
+
+    try {
+        // Test connection ke API
+        const testResponse = await axiosRetry({
+            method: 'GET',
+            url: 'https://api.lelang.go.id/health',
+            timeout: 10000
+        }, 2);
+
+        bot.sendMessage(chatId, `✅ *Connection Test SUCCESS!*\n\nAPI is reachable.\nStatus: ${testResponse.status}\n\nYou can proceed with setup.`, {
+            parse_mode: 'Markdown'
+        });
+    } catch (error) {
+        bot.sendMessage(chatId, `⚠️ *Connection Test FAILED*\n\nError: ${error.message}\n\nPossible issues:\n• Network firewall blocking\n• VPN/Proxy required\n• API temporarily down\n• DNS issues\n\nTry:\n1. Check your internet connection\n2. Restart the bot\n3. Contact support if issue persists`, {
+            parse_mode: 'Markdown'
+        });
+    }
+});
+
 // ============================================
 // CALLBACK QUERY HANDLERS
 // ============================================
@@ -527,7 +567,7 @@ async function handleStatusCheck(chatId) {
     );
 
     if (!statusResult.success) {
-        bot.sendMessage(chatId, `❌ Gagal mengambil status:\n${statusResult.error}\n\n*Tips:*\n• Pastikan bearer token masih valid\n• Pastikan cookies masih valid\n• Coba set ulang token dan cookies`, {
+        bot.sendMessage(chatId, `❌ Gagal mengambil status:\n${statusResult.error}\n\n*Tips:*\n• Pastikan bearer token masih valid\n• Pastikan cookies masih valid\n• Coba set ulang token dan cookies\n• Test connection: /testconnection`, {
             parse_mode: 'Markdown'
         });
         return;
@@ -967,7 +1007,10 @@ function handleSetupGuide(chatId) {
 \`/setPassBidding <passkey>\`
 (Passkey adalah PIN/password untuk bid)
 
-*Langkah 6: Mulai Bid!*
+*Langkah 6: Test Koneksi*
+\`/testconnection\`
+
+*Langkah 7: Mulai Bid!*
 • Cek status: \`/status\`
 • Bid manual: \`/bid <nominal>\`
 • Bid kelipatan: \`/bid kelipatanBid\`
@@ -978,6 +1021,7 @@ function handleSetupGuide(chatId) {
 /setcookies _ga=GA1.2.123456789...
 /setauction 6d815f8f-f41e-4497-b7b1-28703c15a6f6
 /setPassBidding 123456
+/testconnection
 /status
 /bid kelipatanBid
 \`\`\``;
@@ -988,13 +1032,14 @@ function handleSetupGuide(chatId) {
 }
 
 function handleHelp(chatId) {
-    const message = `🤖 *Bantuan Lengkap*
+    const message = `🤖 *Bantuan Lengkap (FIXED VERSION)*
 
 *Perintah Setup:*
 • \`/settoken\` - Set bearer token
 • \`/setcookies\` - Set session cookies
 • \`/setauction\` - Set auction ID
 • \`/setPassBidding\` - Set pass/PIN bidding
+• \`/testconnection\` - Test koneksi ke API
 
 *Perintah Utama:*
 • \`/start\` - Mulai bot
@@ -1014,6 +1059,14 @@ Contoh:
 • Kelipatan Bid: Rp 50.000
 • Nominal Bid: Rp 10.050.000
 
+*Perbaikan di Versi Ini:*
+✅ Fixed connection timeout errors
+✅ Menggunakan Axios dengan auto-retry
+✅ Better error handling
+✅ Increased timeout to 30s
+✅ HTTPS agent with keepAlive
+✅ Connection test command
+
 *Cara Kerja Bot:*
 Bot ini terhubung langsung ke API lelang.go.id untuk:
 1. Mengambil status lelang real-time
@@ -1022,13 +1075,18 @@ Bot ini terhubung langsung ke API lelang.go.id untuk:
 
 *Keuntungan:*
 ✅ Tidak perlu extension
-✅ Lebih stabil
+✅ Lebih stabil dengan auto-retry
 ✅ Lebih cepat
 ✅ Bisa dari mana saja
 ✅ Bid kelipatan otomatis
 
-*Tips:*
+*Troubleshooting:*
+• Jika gagal connect, gunakan /testconnection
 • Token & cookies hanya valid beberapa jam, perlu di-update berkala
+• Pastikan server memiliki akses internet
+• Coba restart server jika masih error
+
+*Tips:*
 • Auction ID bisa dilihat dari URL halaman lelang
 • Pass bidding adalah PIN yang Anda gunakan di website
 • Gunakan /monitor untuk notifikasi otomatis
@@ -1054,7 +1112,8 @@ app.get('/health', (req, res) => {
         status: 'healthy',
         activeSessions: userSessions.size,
         activeMonitoring: activeMonitoring.size,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        version: 'FIXED v1.1'
     });
 });
 
@@ -1066,9 +1125,10 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
     console.log('✅ Server running on http://localhost:' + PORT);
-    console.log('✅ Telegram bot active (API Direct Mode)');
+    console.log('✅ Telegram bot active (API Direct Mode - FIXED)');
     console.log('📱 Kirim /start ke bot untuk memulai');
     console.log('🔗 Bot menggunakan API langsung ke lelang.go.id');
+    console.log('🛠️  Improvements: Axios, auto-retry, better timeout handling');
 });
 
 // Error handling
@@ -1086,7 +1146,8 @@ process.on('SIGINT', () => {
 
     // Stop all monitoring
     activeMonitoring.forEach((monitoring) => {
-        clearInterval(monitoring.interval);
+        if (monitoring.interval) clearInterval(monitoring.interval);
+        if (monitoring.timeout) clearTimeout(monitoring.timeout);
     });
 
     bot.stopPolling();
