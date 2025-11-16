@@ -1,6 +1,6 @@
 // ============================================
-// server-api-direct-fixed.js - Direct API Integration (FIXED)
-// Sistem bid langsung ke API lelang.go.id dengan perbaikan timeout
+// server-api-direct-debug.js - Debug Version
+// Versi dengan enhanced debugging untuk diagnosa masalah
 // ============================================
 
 require('dotenv').config({ path: './config.env' });
@@ -9,6 +9,7 @@ const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const https = require('https');
+const dns = require('dns').promises;
 
 const app = express();
 app.use(cors());
@@ -30,14 +31,101 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 });
 
 // ============================================
-// AXIOS CONFIGURATION
+// ENHANCED DEBUGGING UTILITIES
 // ============================================
 
-// Create axios instance dengan custom config
+const DEBUG = true;
+
+function debugLog(title, data) {
+    if (!DEBUG) return;
+    console.log('\n' + '='.repeat(60));
+    console.log(`🔍 DEBUG: ${title}`);
+    console.log('='.repeat(60));
+    if (typeof data === 'object') {
+        console.log(JSON.stringify(data, null, 2));
+    } else {
+        console.log(data);
+    }
+    console.log('='.repeat(60) + '\n');
+}
+
+async function testDNS(hostname) {
+    try {
+        debugLog('DNS Resolution Test', `Resolving: ${hostname}`);
+        const addresses = await dns.resolve4(hostname);
+        debugLog('DNS Resolution Success', {
+            hostname: hostname,
+            addresses: addresses,
+            firstIP: addresses[0]
+        });
+        return { success: true, addresses };
+    } catch (error) {
+        debugLog('DNS Resolution Failed', {
+            hostname: hostname,
+            error: error.message,
+            code: error.code
+        });
+        return { success: false, error: error.message };
+    }
+}
+
+async function testTCPConnection(hostname, port = 443) {
+    return new Promise((resolve) => {
+        const net = require('net');
+        const socket = new net.Socket();
+        const timeout = 10000;
+
+        socket.setTimeout(timeout);
+
+        socket.on('connect', () => {
+            debugLog('TCP Connection Success', {
+                hostname: hostname,
+                port: port,
+                localAddress: socket.localAddress,
+                localPort: socket.localPort
+            });
+            socket.destroy();
+            resolve({ success: true });
+        });
+
+        socket.on('timeout', () => {
+            debugLog('TCP Connection Timeout', {
+                hostname: hostname,
+                port: port,
+                timeout: timeout
+            });
+            socket.destroy();
+            resolve({ success: false, error: 'Connection timeout' });
+        });
+
+        socket.on('error', (error) => {
+            debugLog('TCP Connection Error', {
+                hostname: hostname,
+                port: port,
+                error: error.message,
+                code: error.code
+            });
+            resolve({ success: false, error: error.message });
+        });
+
+        debugLog('Attempting TCP Connection', {
+            hostname: hostname,
+            port: port,
+            timeout: timeout
+        });
+
+        socket.connect(port, hostname);
+    });
+}
+
+// ============================================
+// AXIOS CONFIGURATION WITH DEBUG
+// ============================================
+
 const axiosInstance = axios.create({
-    timeout: 30000, // 30 detik timeout
+    timeout: 30000,
     httpsAgent: new https.Agent({
-        rejectUnauthorized: false, // Allow self-signed certs jika ada
+        rejectUnauthorized: false,
         keepAlive: true,
         keepAliveMsecs: 1000
     }),
@@ -51,17 +139,103 @@ const axiosInstance = axios.create({
     }
 });
 
-// Retry logic untuk axios
+// Request interceptor untuk debug
+axiosInstance.interceptors.request.use(
+    (config) => {
+        debugLog('Axios Request Starting', {
+            method: config.method?.toUpperCase(),
+            url: config.url,
+            timeout: config.timeout,
+            headers: {
+                ...config.headers,
+                Authorization: config.headers.Authorization ? '[REDACTED]' : undefined,
+                Cookie: config.headers.Cookie ? '[REDACTED]' : undefined
+            }
+        });
+        config.metadata = { startTime: new Date() };
+        return config;
+    },
+    (error) => {
+        debugLog('Axios Request Error', error);
+        return Promise.reject(error);
+    }
+);
+
+// Response interceptor untuk debug
+axiosInstance.interceptors.response.use(
+    (response) => {
+        const duration = new Date() - response.config.metadata.startTime;
+        debugLog('Axios Response Success', {
+            status: response.status,
+            statusText: response.statusText,
+            duration: `${duration}ms`,
+            dataSize: JSON.stringify(response.data).length,
+            headers: response.headers
+        });
+        return response;
+    },
+    (error) => {
+        if (error.config && error.config.metadata) {
+            const duration = new Date() - error.config.metadata.startTime;
+            debugLog('Axios Response Error', {
+                duration: `${duration}ms`,
+                message: error.message,
+                code: error.code,
+                requestURL: error.config?.url,
+                requestMethod: error.config?.method?.toUpperCase(),
+                responseStatus: error.response?.status,
+                responseData: error.response?.data,
+                errno: error.errno,
+                syscall: error.syscall,
+                address: error.address,
+                port: error.port
+            });
+        } else {
+            debugLog('Axios Error (No Config)', {
+                message: error.message,
+                code: error.code,
+                stack: error.stack
+            });
+        }
+        return Promise.reject(error);
+    }
+);
+
+// Retry logic dengan detailed logging
 const axiosRetry = async (config, maxRetries = 3) => {
+    debugLog('Retry Logic Start', {
+        maxRetries: maxRetries,
+        url: config.url
+    });
+
     for (let i = 0; i < maxRetries; i++) {
         try {
+            debugLog(`Attempt ${i + 1}/${maxRetries}`, 'Starting request...');
             const response = await axiosInstance(config);
+            debugLog(`Attempt ${i + 1}/${maxRetries}`, '✅ SUCCESS');
             return response;
         } catch (error) {
-            console.log(`Attempt ${i + 1} failed:`, error.message);
-            if (i === maxRetries - 1) throw error;
-            // Wait before retry (exponential backoff)
-            await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+            debugLog(`Attempt ${i + 1}/${maxRetries}`, {
+                status: '❌ FAILED',
+                error: error.message,
+                code: error.code,
+                willRetry: i < maxRetries - 1
+            });
+
+            if (i === maxRetries - 1) {
+                debugLog('All Retries Exhausted', {
+                    totalAttempts: maxRetries,
+                    finalError: error.message
+                });
+                throw error;
+            }
+
+            const waitTime = Math.pow(2, i) * 1000;
+            debugLog('Waiting Before Retry', {
+                waitTime: `${waitTime}ms`,
+                nextAttempt: i + 2
+            });
+            await new Promise(resolve => setTimeout(resolve, waitTime));
         }
     }
 };
@@ -70,39 +244,36 @@ const axiosRetry = async (config, maxRetries = 3) => {
 // STORAGE & STATE MANAGEMENT
 // ============================================
 
-// Storage untuk session user (cookies + bearer token)
-const userSessions = new Map(); // chatId -> { cookies, bearerToken, auctionId, sessionData, passBidding }
-
-// Storage untuk monitoring aktif
-const activeMonitoring = new Map(); // chatId -> { auctionId, interval }
+const userSessions = new Map();
+const activeMonitoring = new Map();
 
 // ============================================
-// API INTEGRATION FUNCTIONS
+// API INTEGRATION FUNCTIONS WITH DEBUG
 // ============================================
 
-/**
- * Fetch riwayat bid dari API bidding.lelang.go.id
- */
 async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
+    debugLog('fetchBidHistory Called', {
+        auctionId: auctionId,
+        hasCookies: !!cookies,
+        hasToken: !!bearerToken
+    });
+
     try {
         const headers = {
             'Origin': 'https://lelang.go.id',
             'Referer': 'https://lelang.go.id/'
         };
 
-        if (cookies) {
-            headers['Cookie'] = cookies;
-        }
+        if (cookies) headers['Cookie'] = cookies;
+        if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
 
-        if (bearerToken) {
-            headers['Authorization'] = `Bearer ${bearerToken}`;
-        }
+        const url = `https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/${auctionId}/riwayat`;
 
         console.log(`📡 Fetching bid history for auction: ${auctionId}`);
 
         const response = await axiosRetry({
             method: 'GET',
-            url: `https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/${auctionId}/riwayat`,
+            url: url,
             headers: headers
         });
 
@@ -110,37 +281,39 @@ async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
         return { success: true, data: response.data };
     } catch (error) {
         console.error('❌ Error fetching bid history:', error.message);
-        if (error.response) {
-            console.error('Response status:', error.response.status);
-            console.error('Response data:', error.response.data);
-        }
-        return { success: false, error: error.message };
+        debugLog('fetchBidHistory Full Error', {
+            message: error.message,
+            code: error.code,
+            response: error.response?.data,
+            stack: error.stack
+        });
+        return { success: false, error: error.message, fullError: error };
     }
 }
 
-/**
- * Fetch status lelang dari API lelang.go.id
- */
 async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null) {
+    debugLog('fetchAuctionStatus Called', {
+        auctionId: auctionId,
+        hasCookies: !!cookies,
+        hasToken: !!bearerToken
+    });
+
     try {
         const headers = {
             'Origin': 'https://lelang.go.id',
             'Referer': 'https://lelang.go.id/'
         };
 
-        if (cookies) {
-            headers['Cookie'] = cookies;
-        }
+        if (cookies) headers['Cookie'] = cookies;
+        if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
 
-        if (bearerToken) {
-            headers['Authorization'] = `Bearer ${bearerToken}`;
-        }
+        const url = `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`;
 
         console.log(`📡 Fetching auction status for: ${auctionId}`);
 
         const response = await axiosRetry({
             method: 'GET',
-            url: `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`,
+            url: url,
             headers: headers
         });
 
@@ -148,18 +321,25 @@ async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null)
         return { success: true, data: response.data };
     } catch (error) {
         console.error('❌ Error fetching auction status:', error.message);
-        if (error.response) {
-            console.error('Response status:', error.response.status);
-            console.error('Response data:', error.response.data);
-        }
-        return { success: false, error: error.message };
+        debugLog('fetchAuctionStatus Full Error', {
+            message: error.message,
+            code: error.code,
+            response: error.response?.data,
+            stack: error.stack
+        });
+        return { success: false, error: error.message, fullError: error };
     }
 }
 
-/**
- * Kirim bid ke API lelang.go.id
- */
 async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
+    debugLog('sendBidToAPI Called', {
+        auctionId: auctionId,
+        amount: amount,
+        hasCookies: !!cookies,
+        hasToken: !!bearerToken,
+        hasPasskey: !!passkey
+    });
+
     try {
         const headers = {
             'Content-Type': 'application/json',
@@ -167,18 +347,12 @@ async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
             'Referer': 'https://lelang.go.id/'
         };
 
-        if (bearerToken) {
-            headers['Authorization'] = `Bearer ${bearerToken}`;
-        }
-
-        if (cookies) {
-            headers['Cookie'] = cookies;
-        }
+        if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
+        if (cookies) headers['Cookie'] = cookies;
 
         console.log('=== Starting Bid Process ===');
         console.log('Auction ID:', auctionId);
         console.log('Amount:', amount);
-        console.log('Passkey:', passkey ? '***' : 'NOT SET');
 
         // 1. Mulai sesi bid
         const startSessionPayload = {
@@ -214,90 +388,43 @@ async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
         });
 
         console.log('✅ Bid sent successfully:', bidResponse.status);
-        console.log('Response:', bidResponse.data);
-
         return { success: true, result: bidResponse.data };
 
     } catch (error) {
         console.error('❌ Error sending bid:', error.message);
-        if (error.response) {
-            console.error('Response status:', error.response.status);
-            console.error('Response data:', error.response.data);
-        }
-        return { success: false, error: error.message };
+        debugLog('sendBidToAPI Full Error', {
+            message: error.message,
+            code: error.code,
+            response: error.response?.data,
+            stack: error.stack
+        });
+        return { success: false, error: error.message, fullError: error };
     }
 }
 
-/**
- * Format status lelang untuk display
- */
 function formatAuctionStatus(statusData) {
     if (!statusData || !statusData.data) {
         return '❌ Data lelang tidak tersedia';
     }
 
-    const data = statusData.data.data;  // Double nested!
-
-    console.log(data, 'data dari format auction status')
+    const data = statusData.data.data;
     const lot = data?.lotLelang;
     const status = data?.status;
     const peserta = data?.peserta;
 
     let message = `📦 *STATUS LELANG*\n\n`;
-
-    // Status Lelang
     message += `🚦 *Status:* ${status?.statusLelang}\n`;
     message += `👤 *Status Peserta:* ${status?.statusPeserta}\n\n`;
-
-    // Info Lot
     message += `🏷️ *Info Lot:*\n`;
     message += `• Kode Lot: *${lot?.kodeLot}*\n`;
-    message += `• Nama Lot: ${lot?.namaLotLelang}\n`;
-    message += `• No. Registrasi: ${lot?.nomorRegistrasi}\n`;
-    message += `• Pemohon: ${lot?.namaPemohon}\n`;
-    message += `• Lokasi: ${lot?.namaLokasi}\n`;
-    message += `• KPKNL: ${lot?.namaUnitKerja}\n\n`;
+    message += `• Nama Lot: ${lot?.namaLotLelang}\n\n`;
 
-    // Info Harga
-    message += `💰 *Info Harga:*\n`;
-    const nilaiLimit = lot.nilaiLimit ?
-        parseInt(lot.nilaiLimit.toString().replace(/\D/g, '')) : 0;
-    const uangJaminan = parseInt(lot?.uangJaminan);
+    const nilaiLimit = lot.nilaiLimit ? parseInt(lot.nilaiLimit.toString().replace(/\D/g, '')) : 0;
     const kelipatanBid = parseInt(lot?.kelipatanBid);
 
+    message += `💰 *Info Harga:*\n`;
     message += `• Nilai Limit: Rp ${nilaiLimit?.toLocaleString('id-ID')}\n`;
-    message += `• Uang Jaminan: Rp ${uangJaminan?.toLocaleString('id-ID')}\n`;
-    message += `• Kelipatan Bid: Rp ${kelipatanBid?.toLocaleString('id-ID')}\n`;
-
-    // Info Waktu
-    message += `⏰ *Jadwal Lelang:*\n`;
-    const tglMulai = lot?.tglMulaiLelang ? new Date(lot.tglMulaiLelang).toLocaleString('id-ID') : 'N/A';
-    const tglSelesai = lot?.tglSelesaiLelang ? new Date(lot.tglSelesaiLelang).toLocaleString('id-ID') : 'N/A';
-    const batasJaminan = lot?.tanggalBatasJaminan ? new Date(lot.tanggalBatasJaminan).toLocaleString('id-ID') : 'N/A';
-
-    message += `• Mulai: ${tglMulai}\n`;
-    message += `• Selesai: ${tglSelesai}\n`;
-    message += `• Batas Jaminan: ${batasJaminan}\n\n`;
-
-    // Info Peserta
-    if (peserta?.namaPeserta) {
-        message += `👤 *Info Peserta:*\n`;
-        message += `• Nama: ${peserta?.namaPeserta}\n`;
-        message += `• Status Keikutsertaan: ${peserta?.statusKeikutSertaan || 'N/A'}\n`;
-        message += `• PIN Bidding: \`${peserta?.pinBidding || 'N/A'}\`\n`;
-
-        if (peserta?.pemenangLelang) {
-            message += `• Status: 🏆 *PEMENANG LELANG*\n`;
-        }
-        message += `\n`;
-    }
-
-    // Info Kategori
-    message += `📋 *Kategori:*\n`;
-    message += `• ${lot?.namaKategoriLelang || 'N/A'}\n`;
-    message += `• ${lot?.namaJenisLelang || 'N/A'}\n\n`;
-
-    // Auction ID
+    message += `• Kelipatan Bid: Rp ${kelipatanBid?.toLocaleString('id-ID')}\n\n`;
     message += `🔗 *Lot ID:* \`${lot?.lotLelangId || 'N/A'}\``;
 
     return message;
@@ -307,80 +434,119 @@ function formatAuctionStatus(statusData) {
 // TELEGRAM BOT COMMANDS
 // ============================================
 
-// Command: /start
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
-    const firstName = msg.from.first_name || 'User';
+    const welcomeMessage = `🎉 *Debug Version - Lelang Bot*
 
-    const welcomeMessage = `🎉 *Selamat datang di Lelang Bid Bot (API Direct - FIXED)!*
+Versi ini memiliki enhanced debugging untuk diagnosa masalah koneksi.
 
-Halo ${firstName}! 👋
+*Perintah Diagnostik:*
+• \`/diagnose\` - Full diagnostic test
+• \`/testdns\` - Test DNS resolution
+• \`/testtcp\` - Test TCP connection
+• \`/testapi\` - Test API endpoint
 
-Bot ini terhubung langsung ke API lelang.go.id untuk bid otomatis.
-✨ *NEW: Fixed connection timeout issues!*
+*Perintah Normal:*
+• \`/settoken <token>\`
+• \`/setcookies <cookies>\`
+• \`/setauction <id>\`
+• \`/setPassBidding <pin>\`
+• \`/status\`
+• \`/help\`
 
-*🚀 Fitur:*
-• Cek status lelang real-time
-• Bid langsung via API
-• Monitoring otomatis
-• Notifikasi perubahan harga
-• Auto-retry & better error handling
+Semua operasi akan menampilkan debug log detail di console.`;
 
-*📱 Setup Cepat:*
-1. Set cookies: \`/setcookies <cookies>\`
-2. Set bearer token: \`/settoken <bearer_token>\`
-3. Set auction: \`/setauction <auction_id>\`
-4. Set pass bidding: \`/setPassBidding <passkey>\`
-5. Cek status: \`/status\`
-6. Bid: \`/bid <amount>\`
-
-*💡 Tips:*
-• Cookies & token bisa diambil dari browser (F12 → Network)
-• Auction ID ada di URL lelang
-• Pass bidding adalah PIN/password untuk bid
-• Pastikan sudah login di lelang.go.id
-
-Gunakan /help untuk panduan lengkap!`;
-
-    const keyboard = {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: "📖 Panduan Setup", callback_data: "setup_guide" },
-                    { text: "❓ Bantuan", callback_data: "help" }
-                ],
-                [
-                    { text: "📊 Status Lelang", callback_data: "check_status" }
-                ]
-            ]
-        }
-    };
-
-    bot.sendMessage(chatId, welcomeMessage, {
-        parse_mode: 'Markdown',
-        reply_markup: keyboard.reply_markup
-    });
+    bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
 });
 
-// Command: /setcookies - Set session cookies
-bot.onText(/\/setcookies (.+)/, (msg, match) => {
+// Command: /diagnose - Full diagnostic
+bot.onText(/\/diagnose/, async (msg) => {
     const chatId = msg.chat.id;
-    const cookies = match[1].trim();
 
-    if (!userSessions.has(chatId)) {
-        userSessions.set(chatId, {});
+    bot.sendMessage(chatId, '🔍 Running full diagnostic...\n\nCheck server console for detailed logs.');
+
+    debugLog('Full Diagnostic Started', 'Testing all components...');
+
+    // Test 1: DNS Resolution
+    bot.sendMessage(chatId, '1️⃣ Testing DNS resolution...');
+    const dns1 = await testDNS('api.lelang.go.id');
+    const dns2 = await testDNS('bidding.lelang.go.id');
+
+    let dnsResult = dns1.success && dns2.success ? '✅ DNS OK' : '❌ DNS FAILED';
+    bot.sendMessage(chatId, `DNS Test: ${dnsResult}`);
+
+    // Test 2: TCP Connection
+    bot.sendMessage(chatId, '2️⃣ Testing TCP connection...');
+    const tcp1 = await testTCPConnection('api.lelang.go.id', 443);
+    const tcp2 = await testTCPConnection('bidding.lelang.go.id', 443);
+
+    let tcpResult = tcp1.success && tcp2.success ? '✅ TCP OK' : '❌ TCP FAILED';
+    bot.sendMessage(chatId, `TCP Test: ${tcpResult}`);
+
+    // Test 3: HTTPS Request
+    bot.sendMessage(chatId, '3️⃣ Testing HTTPS request...');
+    try {
+        await axiosRetry({
+            method: 'GET',
+            url: 'https://api.lelang.go.id',
+            timeout: 10000
+        }, 2);
+        bot.sendMessage(chatId, 'HTTPS Test: ✅ OK');
+    } catch (error) {
+        bot.sendMessage(chatId, `HTTPS Test: ❌ FAILED\nError: ${error.message}`);
     }
 
-    const session = userSessions.get(chatId);
-    session.cookies = cookies;
-    userSessions.set(chatId, session);
+    // Summary
+    bot.sendMessage(chatId, `
+📊 *Diagnostic Summary:*
 
-    bot.sendMessage(chatId, '✅ Cookies berhasil disimpan!\n\nSekarang set bearer token dengan:\n`/settoken <bearer_token>`', {
-        parse_mode: 'Markdown'
-    });
+DNS: ${dnsResult}
+TCP: ${tcpResult}
+
+Check server console for detailed logs.
+    `, { parse_mode: 'Markdown' });
 });
 
-// Command: /settoken - Set bearer token
+// Command: /testdns
+bot.onText(/\/testdns/, async (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, '🔍 Testing DNS...\n\nCheck console for details.');
+
+    await testDNS('api.lelang.go.id');
+    await testDNS('bidding.lelang.go.id');
+    await testDNS('lelang.go.id');
+
+    bot.sendMessage(chatId, '✅ DNS test complete. Check server console.');
+});
+
+// Command: /testtcp
+bot.onText(/\/testtcp/, async (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, '🔍 Testing TCP...\n\nCheck console for details.');
+
+    const result1 = await testTCPConnection('api.lelang.go.id', 443);
+    const result2 = await testTCPConnection('bidding.lelang.go.id', 443);
+
+    bot.sendMessage(chatId, `TCP Test Results:\n\napi.lelang.go.id: ${result1.success ? '✅' : '❌'}\nbidding.lelang.go.id: ${result2.success ? '✅' : '❌'}\n\nCheck console for details.`);
+});
+
+// Command: /testapi
+bot.onText(/\/testapi/, async (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, '🔍 Testing API...\n\nCheck console for details.');
+
+    try {
+        const response = await axiosRetry({
+            method: 'GET',
+            url: 'https://api.lelang.go.id',
+            timeout: 10000
+        }, 2);
+        bot.sendMessage(chatId, `✅ API Test SUCCESS\n\nStatus: ${response.status}\n\nCheck console for details.`);
+    } catch (error) {
+        bot.sendMessage(chatId, `❌ API Test FAILED\n\nError: ${error.message}\nCode: ${error.code}\n\nCheck console for details.`);
+    }
+});
+
 bot.onText(/\/settoken (.+)/, (msg, match) => {
     const chatId = msg.chat.id;
     const bearerToken = match[1].trim();
@@ -393,12 +559,24 @@ bot.onText(/\/settoken (.+)/, (msg, match) => {
     session.bearerToken = bearerToken;
     userSessions.set(chatId, session);
 
-    bot.sendMessage(chatId, '✅ Bearer token berhasil disimpan!\n\nSekarang set auction ID dengan:\n`/setauction <auction_id>`', {
-        parse_mode: 'Markdown'
-    });
+    bot.sendMessage(chatId, '✅ Bearer token saved!', { parse_mode: 'Markdown' });
 });
 
-// Command: /setauction - Set auction ID
+bot.onText(/\/setcookies (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    const cookies = match[1].trim();
+
+    if (!userSessions.has(chatId)) {
+        userSessions.set(chatId, {});
+    }
+
+    const session = userSessions.get(chatId);
+    session.cookies = cookies;
+    userSessions.set(chatId, session);
+
+    bot.sendMessage(chatId, '✅ Cookies saved!', { parse_mode: 'Markdown' });
+});
+
 bot.onText(/\/setauction ([a-f0-9-]+)/, (msg, match) => {
     const chatId = msg.chat.id;
     const auctionId = match[1].trim();
@@ -411,12 +589,9 @@ bot.onText(/\/setauction ([a-f0-9-]+)/, (msg, match) => {
     session.auctionId = auctionId;
     userSessions.set(chatId, session);
 
-    bot.sendMessage(chatId, `✅ Auction ID berhasil di-set: \`${auctionId}\`\n\nSekarang set pass bidding dengan:\n\`/setPassBidding <passkey>\``, {
-        parse_mode: 'Markdown'
-    });
+    bot.sendMessage(chatId, `✅ Auction ID set: \`${auctionId}\``, { parse_mode: 'Markdown' });
 });
 
-// Command: /setPassBidding - Set passkey untuk bidding
 bot.onText(/\/setPassBidding (.+)/, (msg, match) => {
     const chatId = msg.chat.id;
     const passkey = match[1].trim();
@@ -429,136 +604,19 @@ bot.onText(/\/setPassBidding (.+)/, (msg, match) => {
     session.passBidding = passkey;
     userSessions.set(chatId, session);
 
-    bot.sendMessage(chatId, `✅ Pass bidding berhasil di-set!\n\nSekarang Anda siap untuk melakukan bid.\nGunakan /status untuk cek status lelang!`, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "📊 Cek Status", callback_data: "check_status" }],
-                [{ text: "💰 Bid Sekarang", callback_data: "bid_menu" }]
-            ]
-        }
-    });
+    bot.sendMessage(chatId, `✅ Pass bidding set!`, { parse_mode: 'Markdown' });
 });
 
-// Command: /status - Cek status lelang
 bot.onText(/\/status/, async (msg) => {
     const chatId = msg.chat.id;
-    await handleStatusCheck(chatId);
-});
-
-// Command: /bid - Kirim bid dengan kelipatan bid otomatis
-bot.onText(/\/bid (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const input = match[1].trim();
-
-    // Cek apakah input adalah angka atau "kelipatanBid"
-    if (input.toLowerCase() === 'kelipatanbid' || input.toLowerCase() === 'kelipatan') {
-        await handleBidKelipatan(chatId);
-    } else {
-        const amount = parseInt(input);
-        if (isNaN(amount)) {
-            bot.sendMessage(chatId, '❌ Nominal bid tidak valid!\n\n*Cara penggunaan:*\n• `/bid <nominal>` - Bid dengan nominal tertentu\n• `/bid kelipatanBid` - Bid otomatis sesuai kelipatan', {
-                parse_mode: 'Markdown'
-            });
-            return;
-        }
-        await handleBid(chatId, amount);
-    }
-});
-
-// Command: /monitor - Start monitoring
-bot.onText(/\/monitor/, async (msg) => {
-    const chatId = msg.chat.id;
-    await startSmartMonitoring(chatId);
-});
-
-// Command: /stopmonitor - Stop monitoring
-bot.onText(/\/stopmonitor/, (msg) => {
-    const chatId = msg.chat.id;
-    stopMonitoring(chatId);
-});
-
-// Command: /help
-bot.onText(/\/help/, (msg) => {
-    const chatId = msg.chat.id;
-    handleHelp(chatId);
-});
-
-// Command: /testconnection - Test koneksi ke API
-bot.onText(/\/testconnection/, async (msg) => {
-    const chatId = msg.chat.id;
-
-    bot.sendMessage(chatId, '🔍 Testing connection to API lelang.go.id...\n\nThis may take a moment...');
-
-    try {
-        // Test connection ke API
-        const testResponse = await axiosRetry({
-            method: 'GET',
-            url: 'https://api.lelang.go.id/health',
-            timeout: 10000
-        }, 2);
-
-        bot.sendMessage(chatId, `✅ *Connection Test SUCCESS!*\n\nAPI is reachable.\nStatus: ${testResponse.status}\n\nYou can proceed with setup.`, {
-            parse_mode: 'Markdown'
-        });
-    } catch (error) {
-        bot.sendMessage(chatId, `⚠️ *Connection Test FAILED*\n\nError: ${error.message}\n\nPossible issues:\n• Network firewall blocking\n• VPN/Proxy required\n• API temporarily down\n• DNS issues\n\nTry:\n1. Check your internet connection\n2. Restart the bot\n3. Contact support if issue persists`, {
-            parse_mode: 'Markdown'
-        });
-    }
-});
-
-// ============================================
-// CALLBACK QUERY HANDLERS
-// ============================================
-
-bot.on('callback_query', async (callbackQuery) => {
-    const message = callbackQuery.message;
-    const chatId = message.chat.id;
-    const data = callbackQuery.data;
-
-    bot.answerCallbackQuery(callbackQuery.id);
-
-    switch (data) {
-        case 'setup_guide':
-            handleSetupGuide(chatId);
-            break;
-        case 'help':
-            handleHelp(chatId);
-            break;
-        case 'check_status':
-            await handleStatusCheck(chatId);
-            break;
-        case 'bid_menu':
-            handleBidMenu(chatId);
-            break;
-        case 'bid_kelipatan':
-            await handleBidKelipatan(chatId);
-            break;
-        case 'start_monitor':
-            await startSmartMonitoring(chatId);
-            break;
-        case 'stop_monitor':
-            stopMonitoring(chatId);
-            break;
-    }
-});
-
-// ============================================
-// HANDLER FUNCTIONS
-// ============================================
-
-async function handleStatusCheck(chatId) {
     const session = userSessions.get(chatId);
 
     if (!session || !session.auctionId) {
-        bot.sendMessage(chatId, '❌ Auction ID belum di-set!\n\nGunakan: `/setauction <auction_id>`', {
-            parse_mode: 'Markdown'
-        });
+        bot.sendMessage(chatId, '❌ Auction ID not set!');
         return;
     }
 
-    bot.sendMessage(chatId, '🔄 Mengambil status lelang...');
+    bot.sendMessage(chatId, '🔄 Fetching status...\n\nCheck console for detailed logs.');
 
     const statusResult = await fetchAuctionStatus(
         session.auctionId,
@@ -567,554 +625,36 @@ async function handleStatusCheck(chatId) {
     );
 
     if (!statusResult.success) {
-        bot.sendMessage(chatId, `❌ Gagal mengambil status:\n${statusResult.error}\n\n*Tips:*\n• Pastikan bearer token masih valid\n• Pastikan cookies masih valid\n• Coba set ulang token dan cookies\n• Test connection: /testconnection`, {
-            parse_mode: 'Markdown'
-        });
+        bot.sendMessage(chatId, `❌ Failed to fetch status:\n${statusResult.error}\n\nCheck console for detailed error logs.`);
         return;
-    }
-
-    // Simpan data lelang di session untuk keperluan bid kelipatan
-    if (statusResult.data && statusResult.data.data) {
-        if (!session.sessionData) {
-            session.sessionData = {};
-        }
-        session.sessionData.auctionData = statusResult.data.data;
-        userSessions.set(chatId, session);
     }
 
     const formattedStatus = formatAuctionStatus(statusResult);
-
-    const keyboard = {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: "💰 Bid Manual", callback_data: "bid_menu" },
-                    { text: "🔢 Bid Kelipatan", callback_data: "bid_kelipatan" }
-                ],
-                [
-                    { text: "🔄 Refresh", callback_data: "check_status" },
-                    { text: "📊 Start Monitor", callback_data: "start_monitor" }
-                ]
-            ]
-        }
-    };
-
-    bot.sendMessage(chatId, formattedStatus, {
-        parse_mode: 'Markdown',
-        reply_markup: keyboard.reply_markup
-    });
-}
-
-async function handleBid(chatId, amount) {
-    const session = userSessions.get(chatId);
-
-    if (!session || !session.auctionId) {
-        bot.sendMessage(chatId, '❌ Auction ID belum di-set!\n\nGunakan: `/setauction <auction_id>`', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    if (!session.cookies) {
-        bot.sendMessage(chatId, '❌ Cookies belum di-set!\n\nGunakan: `/setcookies <cookies>`', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    if (!session.bearerToken) {
-        bot.sendMessage(chatId, '❌ Bearer token belum di-set!\n\nGunakan: `/settoken <bearer_token>`', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    if (!session.passBidding) {
-        bot.sendMessage(chatId, '❌ Pass bidding belum di-set!\n\nGunakan: `/setPassBidding <passkey>`', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    bot.sendMessage(chatId, `🔄 Mengirim bid Rp ${amount.toLocaleString('id-ID')}...`);
-
-    const bidResult = await sendBidToAPI(
-        session.auctionId,
-        session.passBidding,
-        amount,
-        session.cookies,
-        session.bearerToken
-    );
-
-    if (bidResult.success) {
-        bot.sendMessage(chatId, `✅ *Bid Berhasil!*\n\nNominal: Rp ${amount.toLocaleString('id-ID')}\n\nGunakan /status untuk cek posisi bid Anda.`, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: "📊 Cek Status", callback_data: "check_status" }]
-                ]
-            }
-        });
-    } else {
-        bot.sendMessage(chatId, `❌ *Bid Gagal!*\n\nError: ${bidResult.error}\n\n*Tips:*\n• Pastikan bearer token masih valid\n• Pastikan cookies masih valid\n• Pastikan pass bidding benar\n• Pastikan nominal lebih tinggi dari bid saat ini\n• Pastikan lelang masih berjalan`, {
-            parse_mode: 'Markdown'
-        });
-    }
-}
-
-async function handleBidKelipatan(chatId) {
-    const session = userSessions.get(chatId);
-
-    if (!session || !session.auctionId) {
-        bot.sendMessage(chatId, '❌ Auction ID belum di-set!\n\nGunakan: `/setauction <auction_id>`', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    // Ambil status lelang terbaru
-    bot.sendMessage(chatId, '🔄 Mengambil info kelipatan bid dan riwayat...');
-
-    const statusResult = await fetchAuctionStatus(
-        session.auctionId,
-        session.cookies,
-        session.bearerToken
-    );
-
-    if (!statusResult.success || !statusResult.data || !statusResult.data.data) {
-        bot.sendMessage(chatId, `❌ Gagal mengambil info lelang!\n\nError: ${statusResult.error}\n\nSilakan coba lagi atau gunakan /bid <nominal> untuk bid manual.`, {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    const data = statusResult.data.data;
-    const lot = data?.lotLelang;
-
-    if (!lot) {
-        bot.sendMessage(chatId, '❌ Data lot tidak ditemukan!');
-        return;
-    }
-
-    // Ambil kelipatan bid
-    const kelipatanBid = parseInt(lot?.kelipatanBid);
-    const nilaiLimit = lot.nilaiLimit ? parseInt(lot.nilaiLimit.toString().replace(/\D/g, '')) : 0;
-
-    if (!kelipatanBid || kelipatanBid <= 0) {
-        bot.sendMessage(chatId, '❌ Kelipatan bid tidak valid!\n\nSilakan gunakan /bid <nominal> untuk bid manual.', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    // Ambil riwayat bid untuk mendapatkan harga tertinggi
-    const historyResult = await fetchBidHistory(
-        session.auctionId,
-        session.cookies,
-        session.bearerToken
-    );
-
-    let hargaTertinggi = nilaiLimit; // Default ke nilai limit jika belum ada bid
-
-    if (historyResult.success && historyResult.data.data) {
-        console.log('=== DEBUG RIWAYAT BID ===');
-        console.log('Full response:', JSON.stringify(historyResult.data.data, null, 2));
-
-        // Response bisa langsung array atau wrapped di dalam data
-        let riwayat = historyResult.data.data;
-
-        // Cek jika response wrapped dalam object dengan key 'data'
-        if (riwayat.data && Array.isArray(riwayat.data)) {
-            riwayat = riwayat.data;
-            console.log('Response wrapped, mengambil dari .data');
-        }
-
-        console.log('Is Array?', Array.isArray(riwayat));
-        console.log('Length:', Array.isArray(riwayat) ? riwayat.length : 'N/A');
-
-        // Ambil bid tertinggi dari riwayat (index 0 karena sudah terurut dari tertinggi)
-        if (Array.isArray(riwayat) && riwayat.length > 0) {
-            console.log('Item pertama (tertinggi):', JSON.stringify(riwayat[0], null, 2));
-            const bidTertinggi = riwayat[0];
-
-            if (bidTertinggi.bidAmount) {
-                hargaTertinggi = parseInt(bidTertinggi.bidAmount);
-                console.log('✅ Harga tertinggi berhasil diambil:', hargaTertinggi);
-            } else {
-                console.log('❌ bidAmount tidak ditemukan di object');
-            }
-        } else {
-            console.log('❌ Riwayat kosong atau bukan array');
-            console.log('Type of riwayat:', typeof riwayat);
-        }
-    } else {
-        console.log('❌ Gagal ambil riwayat, menggunakan nilai limit sebagai default');
-        console.log('Error:', historyResult.error);
-    }
-
-    console.log('=== PERHITUNGAN BID ===');
-    console.log('Nilai Limit:', nilaiLimit);
-    console.log('Harga Tertinggi (final):', hargaTertinggi);
-    console.log('Kelipatan Bid:', kelipatanBid);
-
-    // Hitung nominal bid: harga tertinggi saat ini + kelipatan bid
-    const bidAmount = hargaTertinggi + kelipatanBid;
-
-    console.log('Bid Amount (hasil):', bidAmount);
-    console.log('=========================');
-
-    // Info sebelum bid
-    const infoMessage = `💰 *Bid Dengan Kelipatan*\n\n` +
-        `📊 Info:\n` +
-        `• Nilai Limit: Rp ${nilaiLimit.toLocaleString('id-ID')}\n` +
-        `• Harga Tertinggi: Rp ${hargaTertinggi.toLocaleString('id-ID')}\n` +
-        `• Kelipatan Bid: Rp ${kelipatanBid.toLocaleString('id-ID')}\n` +
-        `• Nominal Bid Anda: Rp ${bidAmount.toLocaleString('id-ID')}\n\n` +
-        `🔄 Mengirim bid...`;
-
-    await bot.sendMessage(chatId, infoMessage, { parse_mode: 'Markdown' });
-
-    // Langsung kirim bid tanpa konfirmasi
-    await handleBid(chatId, bidAmount);
-}
-
-function handleBidMenu(chatId) {
-    const session = userSessions.get(chatId);
-
-    if (!session || !session.auctionId) {
-        bot.sendMessage(chatId, '❌ Auction ID belum di-set!\n\nGunakan: `/setauction <auction_id>`', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    const message = `💰 *Menu Bid*
-
-*Cara melakukan bid:*
-
-*1. Bid Manual:*
-\`/bid <nominal>\`
-Contoh: \`/bid 1500000\`
-
-*2. Bid Kelipatan (Otomatis):*
-\`/bid kelipatanBid\`
-Bot akan otomatis menghitung: Nilai Limit + Kelipatan Bid
-
-*Auction ID aktif:*
-\`${session.auctionId}\`
-
-*Status Pass Bidding:*
-${session.passBidding ? '✅ Sudah di-set' : '❌ Belum di-set - gunakan `/setPassBidding <passkey>`'}
-
-⚠️ Pastikan nominal lebih tinggi dari penawaran saat ini!`;
-
-    bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: "🔢 Bid Kelipatan", callback_data: "bid_kelipatan" }
-                ],
-                [
-                    { text: "📊 Cek Status Lelang", callback_data: "check_status" }
-                ]
-            ]
-        }
-    });
-}
-
-async function startSmartMonitoring(chatId) {
-    const session = userSessions.get(chatId);
-
-    if (!session || !session.auctionId) {
-        bot.sendMessage(chatId, '❌ Auction ID belum di-set!');
-        return;
-    }
-
-    if (activeMonitoring.has(chatId)) {
-        bot.sendMessage(chatId, '⚠️ Monitoring sudah aktif!\n\nGunakan /stopmonitor untuk menghentikan.');
-        return;
-    }
-
-    let lastPrice = null;
-    let lastStatus = null;
-    let currentInterval = 3000; // Start dengan 3 detik
-
-    async function monitorLoop() {
-        try {
-            // Get status to check time remaining
-            const statusResult = await fetchAuctionStatus(
-                session.auctionId,
-                session.cookies,
-                session.bearerToken
-            );
-
-            if (statusResult.success && statusResult.data && statusResult.data.data) {
-                const data = statusResult.data.data;
-                const lot = data?.lotLelang;
-
-                // Calculate time remaining
-                if (lot?.tglSelesaiLelang) {
-                    const endTime = new Date(lot.tglSelesaiLelang);
-                    const now = new Date();
-                    const timeRemaining = endTime - now;
-                    const minutesRemaining = Math.floor(timeRemaining / 1000 / 60);
-
-                    // Adjust interval based on time remaining
-                    if (minutesRemaining <= 5) {
-                        currentInterval = 1000; // 1 detik untuk 5 menit terakhir
-                    } else if (minutesRemaining <= 15) {
-                        currentInterval = 2000; // 2 detik untuk 15 menit terakhir
-                    } else if (minutesRemaining <= 60) {
-                        currentInterval = 3000; // 3 detik untuk 1 jam terakhir
-                    } else {
-                        currentInterval = 5000; // 5 detik untuk sisanya
-                    }
-                }
-
-                // Check status
-                const currentStatus = data.status?.statusLelang;
-                if (currentStatus && currentStatus !== lastStatus) {
-                    bot.sendMessage(chatId, `🔔 *Perubahan Status!*\n\nStatus: ${currentStatus}`, {
-                        parse_mode: 'Markdown'
-                    });
-                    lastStatus = currentStatus;
-                }
-
-                // Check if ended
-                if (currentStatus && (currentStatus.toLowerCase().includes('selesai') ||
-                    currentStatus.toLowerCase().includes('berakhir'))) {
-                    bot.sendMessage(chatId, '🏁 *Lelang Berakhir!*', { parse_mode: 'Markdown' });
-                    stopMonitoring(chatId);
-                    return;
-                }
-            }
-
-            // Monitor bid history
-            const historyResult = await fetchBidHistory(
-                session.auctionId,
-                session.cookies,
-                session.bearerToken
-            );
-
-            if (historyResult.success && historyResult.data && historyResult.data.data) {
-                let riwayat = historyResult.data.data;
-                if (riwayat.data && Array.isArray(riwayat.data)) {
-                    riwayat = riwayat.data;
-                }
-
-                if (Array.isArray(riwayat) && riwayat.length > 0) {
-                    const latestBid = riwayat[0];
-                    const currentPrice = parseInt(latestBid.bidAmount);
-
-                    if (currentPrice !== lastPrice && lastPrice !== null) {
-                        const priceDiff = currentPrice - lastPrice;
-                        bot.sendMessage(chatId,
-                            `🚨 *Penawaran Baru!*\n\n` +
-                            `Harga: Rp ${currentPrice.toLocaleString('id-ID')}\n` +
-                            `Naik: Rp ${priceDiff.toLocaleString('id-ID')}\n` +
-                            `Penawar: ${latestBid.bidderName || 'Unknown'}`,
-                            {
-                                parse_mode: 'Markdown',
-                                reply_markup: {
-                                    inline_keyboard: [
-                                        [{ text: "💰 Bid Kelipatan", callback_data: "bid_kelipatan" }]
-                                    ]
-                                }
-                            }
-                        );
-                    }
-                    lastPrice = currentPrice;
-                }
-            }
-
-        } catch (error) {
-            console.error('Smart monitoring error:', error);
-        }
-
-        // Schedule next check with current interval
-        const monitoring = activeMonitoring.get(chatId);
-        if (monitoring) {
-            monitoring.timeout = setTimeout(monitorLoop, currentInterval);
-        }
-    }
-
-    // Start monitoring
-    activeMonitoring.set(chatId, {
-        auctionId: session.auctionId,
-        timeout: setTimeout(monitorLoop, currentInterval)
-    });
-
-    bot.sendMessage(chatId,
-        '✅ *Smart Monitoring Aktif!*\n\n' +
-        '🎯 Interval otomatis:\n' +
-        '• >1 jam: 5 detik\n' +
-        '• 15-60 menit: 3 detik\n' +
-        '• 5-15 menit: 2 detik\n' +
-        '• <5 menit: 1 detik\n\n' +
-        'Gunakan /stopmonitor untuk stop.',
-        { parse_mode: 'Markdown' }
-    );
-}
-
-function stopMonitoring(chatId) {
-    const monitoring = activeMonitoring.get(chatId);
-
-    if (!monitoring) {
-        bot.sendMessage(chatId, '❌ Tidak ada monitoring yang aktif.');
-        return;
-    }
-
-    // Clear interval or timeout
-    if (monitoring.interval) {
-        clearInterval(monitoring.interval);
-    }
-    if (monitoring.timeout) {
-        clearTimeout(monitoring.timeout);
-    }
-
-    activeMonitoring.delete(chatId);
-
-    bot.sendMessage(chatId, '✅ Monitoring dihentikan.');
-}
-
-function handleSetupGuide(chatId) {
-    const message = `📖 *Panduan Setup*
-
-*Langkah 1: Ambil Bearer Token & Cookies*
-1. Buka lelang.go.id di browser
-2. Login ke akun Anda
-3. Tekan F12 untuk buka DevTools
-4. Pergi ke tab Network
-5. Refresh halaman
-6. Klik request ke api.lelang.go.id
-7. Di Request Headers, cari:
-   • "Authorization: Bearer xxxx" (copy token-nya)
-   • "Cookie: xxxx" (copy semua cookie)
-
-*Langkah 2: Set Token & Cookies di Bot*
-\`/settoken <bearer_token>\`
-\`/setcookies <cookies>\`
-
-*Langkah 3: Ambil Auction ID*
-• Buka halaman lelang yang ingin di-bid
-• Copy ID dari URL (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
-
-*Langkah 4: Set Auction ID*
-\`/setauction <auction_id>\`
-
-*Langkah 5: Set Pass Bidding*
-\`/setPassBidding <passkey>\`
-(Passkey adalah PIN/password untuk bid)
-
-*Langkah 6: Test Koneksi*
-\`/testconnection\`
-
-*Langkah 7: Mulai Bid!*
-• Cek status: \`/status\`
-• Bid manual: \`/bid <nominal>\`
-• Bid kelipatan: \`/bid kelipatanBid\`
-
-*Contoh Lengkap:*
-\`\`\`
-/settoken eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-/setcookies _ga=GA1.2.123456789...
-/setauction 6d815f8f-f41e-4497-b7b1-28703c15a6f6
-/setPassBidding 123456
-/testconnection
-/status
-/bid kelipatanBid
-\`\`\``;
-
-    bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
-}
-
-function handleHelp(chatId) {
-    const message = `🤖 *Bantuan Lengkap (FIXED VERSION)*
-
-*Perintah Setup:*
-• \`/settoken\` - Set bearer token
-• \`/setcookies\` - Set session cookies
-• \`/setauction\` - Set auction ID
-• \`/setPassBidding\` - Set pass/PIN bidding
-• \`/testconnection\` - Test koneksi ke API
-
-*Perintah Utama:*
-• \`/start\` - Mulai bot
-• \`/help\` - Bantuan ini
-• \`/status\` - Cek status lelang
-• \`/bid <nominal>\` - Kirim bid manual
-• \`/bid kelipatanBid\` - Bid otomatis (limit + kelipatan)
-• \`/monitor\` - Start monitoring
-• \`/stopmonitor\` - Stop monitoring
-
-*Cara Kerja Bid Kelipatan:*
-Bot akan otomatis menghitung:
-Nominal Bid = Nilai Limit + Kelipatan Bid
-
-Contoh:
-• Nilai Limit: Rp 10.000.000
-• Kelipatan Bid: Rp 50.000
-• Nominal Bid: Rp 10.050.000
-
-*Perbaikan di Versi Ini:*
-✅ Fixed connection timeout errors
-✅ Menggunakan Axios dengan auto-retry
-✅ Better error handling
-✅ Increased timeout to 30s
-✅ HTTPS agent with keepAlive
-✅ Connection test command
-
-*Cara Kerja Bot:*
-Bot ini terhubung langsung ke API lelang.go.id untuk:
-1. Mengambil status lelang real-time
-2. Mengirim bid otomatis
-3. Monitoring perubahan status
-
-*Keuntungan:*
-✅ Tidak perlu extension
-✅ Lebih stabil dengan auto-retry
-✅ Lebih cepat
-✅ Bisa dari mana saja
-✅ Bid kelipatan otomatis
-
-*Troubleshooting:*
-• Jika gagal connect, gunakan /testconnection
-• Token & cookies hanya valid beberapa jam, perlu di-update berkala
-• Pastikan server memiliki akses internet
-• Coba restart server jika masih error
-
-*Tips:*
-• Auction ID bisa dilihat dari URL halaman lelang
-• Pass bidding adalah PIN yang Anda gunakan di website
-• Gunakan /monitor untuk notifikasi otomatis
-• Pastikan sudah membayar uang jaminan sebelum bid
-• Bid kelipatan lebih cepat dan praktis`;
-
-    bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
-}
-
-// ============================================
-// API ENDPOINTS (untuk extension jika masih dipakai)
-// ============================================
-
-app.post('/api/tab-connected', (req, res) => {
-    console.log('Tab connected:', req.body);
-    res.json({ success: true });
+    bot.sendMessage(chatId, formattedStatus, { parse_mode: 'Markdown' });
 });
 
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'healthy',
-        activeSessions: userSessions.size,
-        activeMonitoring: activeMonitoring.size,
-        timestamp: new Date().toISOString(),
-        version: 'FIXED v1.1'
-    });
+bot.onText(/\/help/, (msg) => {
+    const chatId = msg.chat.id;
+    const message = `🤖 *Debug Version Help*
+
+*Diagnostic Commands:*
+• \`/diagnose\` - Run full diagnostic
+• \`/testdns\` - Test DNS resolution  
+• \`/testtcp\` - Test TCP connection
+• \`/testapi\` - Test API endpoint
+
+*Setup Commands:*
+• \`/settoken <token>\`
+• \`/setcookies <cookies>\`
+• \`/setauction <id>\`
+• \`/setPassBidding <pin>\`
+
+*Main Commands:*
+• \`/status\` - Check auction status
+
+All operations will show detailed debug logs in the server console.`;
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 });
 
 // ============================================
@@ -1123,33 +663,37 @@ app.get('/health', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+    console.log('\n' + '='.repeat(60));
+    console.log('🐛 DEBUG MODE ENABLED');
+    console.log('='.repeat(60));
     console.log('✅ Server running on http://localhost:' + PORT);
-    console.log('✅ Telegram bot active (API Direct Mode - FIXED)');
-    console.log('📱 Kirim /start ke bot untuk memulai');
-    console.log('🔗 Bot menggunakan API langsung ke lelang.go.id');
-    console.log('🛠️  Improvements: Axios, auto-retry, better timeout handling');
+    console.log('✅ Telegram bot active (DEBUG MODE)');
+    console.log('📱 Send /start to bot');
+    console.log('🔍 All operations will show detailed debug logs');
+    console.log('='.repeat(60) + '\n');
+
+    // Auto-run diagnostic on startup
+    debugLog('Auto Diagnostic on Startup', 'Testing connectivity...');
+
+    await testDNS('api.lelang.go.id');
+    await testDNS('bidding.lelang.go.id');
+    await testTCPConnection('api.lelang.go.id', 443);
+    await testTCPConnection('bidding.lelang.go.id', 443);
+
+    console.log('\n✅ Startup diagnostic complete. Bot ready.\n');
 });
 
-// Error handling
 bot.on('error', (error) => {
-    console.error('Bot error:', error);
+    debugLog('Bot Error', error);
 });
 
 bot.on('polling_error', (error) => {
-    console.error('Polling error:', error);
+    debugLog('Polling Error', error);
 });
 
-// Cleanup on exit
 process.on('SIGINT', () => {
     console.log('\n🛑 Stopping server...');
-
-    // Stop all monitoring
-    activeMonitoring.forEach((monitoring) => {
-        if (monitoring.interval) clearInterval(monitoring.interval);
-        if (monitoring.timeout) clearTimeout(monitoring.timeout);
-    });
-
     bot.stopPolling();
     process.exit(0);
 });
