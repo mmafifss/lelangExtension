@@ -7,7 +7,6 @@ require('dotenv').config({ path: './config.env' });
 const express = require('express');
 const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
-const HttpsProxyAgent = require('https-proxy-agent')
 
 const app = express();
 app.use(cors());
@@ -37,28 +36,6 @@ const userSessions = new Map(); // chatId -> { cookies, bearerToken, auctionId, 
 
 // Storage untuk monitoring aktif
 const activeMonitoring = new Map(); // chatId -> { auctionId, interval }
-
-const proxyList = [
-    '8.148.23.202:4006',
-    '8.148.23.165:3128',
-    '128.199.202.122:80',
-    '8.219.229.53:90'
-    // add more proxies here
-];
-
-function getRandomProxy() {
-    return proxyList[Math.floor(Math.random() * proxyList.length)];
-}
-
-async function fetchWithProxy(url, options = {}) {
-    const proxy = getRandomProxy();
-    const agent = new HttpsProxyAgent(`http://${proxy}`);
-
-    return fetch(url, {
-        ...options,
-        agent,
-    });
-}
 
 // ============================================
 // API INTEGRATION FUNCTIONS
@@ -130,7 +107,7 @@ async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null)
             headers['Authorization'] = `Bearer ${bearerToken}`;
         }
 
-        const response = await fetchWithProxy(
+        const response = await fetch(
             `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`,
             { headers, method: "GET" }
         );
