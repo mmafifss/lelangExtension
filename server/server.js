@@ -85,41 +85,56 @@ async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
 /**
  * Fetch status lelang dari API lelang.go.id
  */
+/**
+ * Fetch status lelang dari API lelang.go.id menggunakan curl
+ */
 async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null) {
     try {
-        const headers = {
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Authorization': `Bearer ${bearerToken}`,
-            'Origin': 'https://lelang.go.id',
-            'Referer': 'https://lelang.go.id/',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"macOS"',
-        };
+        // Build curl command
+        let curlCommand = `curl -s 'https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true' \\
+  -H 'Accept: application/json, text/plain, */*' \\
+  -H 'Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7' \\
+  -H 'Connection: keep-alive' \\
+  -H 'Origin: https://lelang.go.id' \\
+  -H 'Referer: https://lelang.go.id/' \\
+  -H 'Sec-Fetch-Dest: empty' \\
+  -H 'Sec-Fetch-Mode: cors' \\
+  -H 'Sec-Fetch-Site: same-site' \\
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36' \\
+  -H 'sec-ch-ua: "Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"' \\
+  -H 'sec-ch-ua-mobile: ?0' \\
+  -H 'sec-ch-ua-platform: "macOS"'`;
 
-        if (cookies) {
-            headers['Cookie'] = cookies;
-        }
-
+        // Add Authorization header if bearerToken exists
         if (bearerToken) {
-            headers['Authorization'] = `Bearer ${bearerToken}`;
+            curlCommand += ` \\\n  -H 'Authorization: Bearer ${bearerToken}'`;
         }
 
-        const response = await fetch(
-            `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`,
-            { headers, method: "GET" }
-        );
-
-        if (!response.ok) {
-            throw new Error(`API returned ${response.status}: ${response.statusText}`);
+        // Add Cookie header if cookies exist
+        if (cookies) {
+            // Escape single quotes in cookies
+            const escapedCookies = cookies.replace(/'/g, "'\\''");
+            curlCommand += ` \\\n  -H 'Cookie: ${escapedCookies}'`;
         }
 
-        const data = await response.json();
+        console.log('Executing curl command for auction status...');
+
+        // Execute curl using child_process
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execPromise = promisify(exec);
+
+        const { stdout, stderr } = await execPromise(curlCommand);
+
+        if (stderr && !stdout) {
+            throw new Error(`Curl error: ${stderr}`);
+        }
+
+        const data = JSON.parse(stdout);
         return { success: true, data };
+
     } catch (error) {
-        console.error('Error fetching auction status:', error);
+        console.error('Error fetching auction status with curl:', error);
         return { success: false, error: error.message };
     }
 }
