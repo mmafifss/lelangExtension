@@ -7,6 +7,7 @@ require('dotenv').config({ path: './config.env' });
 const express = require('express');
 const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
+const HttpsProxyAgent = require('https-proxy-agent')
 
 const app = express();
 app.use(cors());
@@ -36,6 +37,28 @@ const userSessions = new Map(); // chatId -> { cookies, bearerToken, auctionId, 
 
 // Storage untuk monitoring aktif
 const activeMonitoring = new Map(); // chatId -> { auctionId, interval }
+
+const proxyList = [
+    '8.148.23.202:4006',
+    '8.148.23.165:3128',
+    '128.199.202.122:80',
+    '8.219.229.53:90'
+    // add more proxies here
+];
+
+function getRandomProxy() {
+    return proxyList[Math.floor(Math.random() * proxyList.length)];
+}
+
+async function fetchWithProxy(url, options = {}) {
+    const proxy = getRandomProxy();
+    const agent = new HttpsProxyAgent(`http://${proxy}`);
+
+    return fetch(url, {
+        ...options,
+        agent,
+    });
+}
 
 // ============================================
 // API INTEGRATION FUNCTIONS
@@ -85,56 +108,41 @@ async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
 /**
  * Fetch status lelang dari API lelang.go.id
  */
-/**
- * Fetch status lelang dari API lelang.go.id menggunakan curl
- */
 async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null) {
     try {
-        // Build curl command
-        let curlCommand = `curl -s 'https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true' \\
-  -H 'Accept: application/json, text/plain, */*' \\
-  -H 'Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7' \\
-  -H 'Connection: keep-alive' \\
-  -H 'Origin: https://lelang.go.id' \\
-  -H 'Referer: https://lelang.go.id/' \\
-  -H 'Sec-Fetch-Dest: empty' \\
-  -H 'Sec-Fetch-Mode: cors' \\
-  -H 'Sec-Fetch-Site: same-site' \\
-  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36' \\
-  -H 'sec-ch-ua: "Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"' \\
-  -H 'sec-ch-ua-mobile: ?0' \\
-  -H 'sec-ch-ua-platform: "macOS"'`;
+        const headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Authorization': `Bearer ${bearerToken}`,
+            'Origin': 'https://lelang.go.id',
+            'Referer': 'https://lelang.go.id/',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"macOS"',
+        };
 
-        // Add Authorization header if bearerToken exists
-        if (bearerToken) {
-            curlCommand += ` \\\n  -H 'Authorization: Bearer ${bearerToken}'`;
-        }
-
-        // Add Cookie header if cookies exist
         if (cookies) {
-            // Escape single quotes in cookies
-            const escapedCookies = cookies.replace(/'/g, "'\\''");
-            curlCommand += ` \\\n  -H 'Cookie: ${escapedCookies}'`;
+            headers['Cookie'] = cookies;
         }
 
-        console.log('Executing curl command for auction status...');
-
-        // Execute curl using child_process
-        const { exec } = require('child_process');
-        const { promisify } = require('util');
-        const execPromise = promisify(exec);
-
-        const { stdout, stderr } = await execPromise(curlCommand);
-
-        if (stderr && !stdout) {
-            throw new Error(`Curl error: ${stderr}`);
+        if (bearerToken) {
+            headers['Authorization'] = `Bearer ${bearerToken}`;
         }
 
-        const data = JSON.parse(stdout);
+        const response = await fetchWithProxy(
+            `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`,
+            { headers, method: "GET" }
+        );
+
+        if (!response.ok) {
+            throw new Error(`API returned ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
         return { success: true, data };
-
     } catch (error) {
-        console.error('Error fetching auction status with curl:', error);
+        console.error('Error fetching auction status:', error);
         return { success: false, error: error.message };
     }
 }
