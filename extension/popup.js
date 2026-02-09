@@ -115,15 +115,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                     let telegramHTML = '<div style="line-height: 1.6;">';
 
-                    // 1. Cookies
+                    // 1. Cookies (tampilkan lengkap)
                     telegramHTML += '<div style="margin-bottom: 8px;">';
                     telegramHTML += '<strong style="color: #1976d2;">1. Cookies:</strong><br>';
                     if (response.cookies) {
-                        const cookiesShort = response.cookies.length > 50
-                            ? response.cookies.substring(0, 50) + '...'
-                            : response.cookies;
-                        telegramHTML += `<code style="font-size: 10px; background: #fff; padding: 2px 4px; border-radius: 3px;">${cookiesShort}</code>`;
-                        telegramHTML += '<br><span style="color: #4caf50; font-size: 11px;">✅ Tersedia</span>';
+                        telegramHTML += `<code style="font-size: 9px; background: #fff; padding: 4px; border-radius: 3px; display: block; word-break: break-all; max-height: 60px; overflow-y: auto;">${response.cookies}</code>`;
+                        telegramHTML += '<span style="color: #4caf50; font-size: 11px;">✅ Tersedia (${response.cookies.length} chars)</span>';
                     } else {
                         telegramHTML += '<span style="color: #f44336; font-size: 11px;">❌ Tidak ditemukan</span>';
                     }
@@ -154,16 +151,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                     telegramHTML += '</div>';
 
-                    // 4. Passkey (dengan status detection)
+                    // 4. Passkey (tampilkan langsung tanpa hide)
                     telegramHTML += '<div style="margin-bottom: 8px;">';
                     telegramHTML += '<strong style="color: #1976d2;">4. Passkey (PIN):</strong><br>';
 
                     if (response.passkey) {
-                        telegramHTML += `<code style="font-size: 12px; background: #fff; padding: 2px 6px; border-radius: 3px; font-weight: bold;">${response.passkey}</code>`;
+                        telegramHTML += `<code style="font-size: 14px; background: #fff; padding: 4px 8px; border-radius: 3px; font-weight: bold; color: #1976d2;">${response.passkey}</code>`;
                         telegramHTML += '<br><span style="color: #4caf50; font-size: 11px;">✅ Tersedia</span>';
-                    } else if (response.passkeyStatus === 'hidden') {
-                        telegramHTML += '<span style="color: #ff9800; font-size: 11px;">⚠️ PIN tersembunyi</span>';
-                        telegramHTML += '<br><button id="showPinBtn" style="margin-top: 5px; padding: 4px 8px; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">👁️ Klik Show PIN di Halaman</button>';
                     } else {
                         telegramHTML += '<span style="color: #f44336; font-size: 11px;">❌ Tidak ditemukan</span>';
                         telegramHTML += '<br><span style="font-size: 10px; color: #666;">Scroll ke bawah halaman untuk melihat PIN Bidding</span>';

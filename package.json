@@ -6,7 +6,7 @@
     "install-server": "cd server && npm install",
     "install-extension": "cd extension && npm install",
     "install-all": "npm run install-server && npm run install-extension",
-    "start-server": "cd server && npm start",
+    "start-server": "cd server && nodemon server.js",
     "dev-server": "cd server && npm run dev",
     "build": "echo \"No build process needed\"",
     "test": "echo \"Error: no test specified\" && exit 1",

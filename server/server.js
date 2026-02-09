@@ -38,36 +38,90 @@ const userSessions = new Map(); // chatId -> { cookies, bearerToken, auctionId, 
 const activeMonitoring = new Map(); // chatId -> { auctionId, interval }
 
 // ============================================
+// OPTIMIZATION: CONNECTION POOLING & CACHING
+// ============================================
+
+// Request cache untuk deduplication (hindari double request)
+const requestCache = new Map(); // key -> { result, timestamp }
+const CACHE_TTL = 1000; // 1 detik
+
+// Session cache dengan expiry lebih lama
+const bidSessionCache = new Map(); // auctionId -> { timestamp, expiry }
+
+// Helper untuk cached fetch
+async function cachedFetch(key, fetchFn) {
+    const cached = requestCache.get(key);
+    const now = Date.now();
+
+    if (cached && (now - cached.timestamp) < CACHE_TTL) {
+        return cached.result;
+    }
+
+    const result = await fetchFn();
+    requestCache.set(key, { result, timestamp: now });
+    
+    // Cleanup cache lama setiap 10 detik
+    if (Math.random() < 0.1) { // 10% chance untuk cleanup
+        for (const [k, v] of requestCache.entries()) {
+            if (now - v.timestamp > CACHE_TTL * 2) {
+                requestCache.delete(k);
+            }
+        }
+    }
+    
+    return result;
+}
+
+// Helper untuk timeout (compatible dengan semua Node version)
+function createTimeoutPromise(timeoutMs) {
+    return new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`Request timeout after ${timeoutMs}ms`)), timeoutMs);
+    });
+}
+
+// Helper untuk fetch dengan timeout
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+    return Promise.race([
+        fetch(url, options),
+        createTimeoutPromise(timeoutMs)
+    ]);
+}
+
+// ============================================
 // API INTEGRATION FUNCTIONS
 // ============================================
 
 /**
- * Fetch riwayat bid dari API bidding.lelang.go.id
+ * Fetch riwayat bid dari API bidding.lelang.go.id (OPTIMIZED with timeout)
+ * TIDAK menggunakan cache karena bid harus real-time!
  */
-async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
+async function fetchBidHistory(auctionId, cookies = null, bearerToken = null, useCache = false) {
+    const cacheKey = `history:${auctionId}`;
+    
+    // CRITICAL: Untuk bid, JANGAN pakai cache! (useCache = false)
+    // Cache hanya untuk display/monitoring (useCache = true)
+    if (useCache) {
+        return cachedFetch(cacheKey, () => fetchBidHistoryDirect(auctionId, cookies, bearerToken));
+    }
+    
+    return fetchBidHistoryDirect(auctionId, cookies, bearerToken);
+}
+
+async function fetchBidHistoryDirect(auctionId, cookies, bearerToken) {
     try {
         const headers = {
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'application/json',
             'Origin': 'https://lelang.go.id',
             'Referer': 'https://lelang.go.id/',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"macOS"',
         };
 
-        if (cookies) {
-            headers['Cookie'] = cookies;
-        }
+        if (cookies) headers['Cookie'] = cookies;
+        if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
 
-        if (bearerToken) {
-            headers['Authorization'] = `Bearer ${bearerToken}`;
-        }
-
-        const response = await fetch(
+        const response = await fetchWithTimeout(
             `https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/${auctionId}/riwayat`,
-            { headers, method: "GET" }
+            { headers, method: "GET" },
+            4000 // 4 detik timeout
         );
 
         if (!response.ok) {
@@ -77,39 +131,29 @@ async function fetchBidHistory(auctionId, cookies = null, bearerToken = null) {
         const data = await response.json();
         return { success: true, data };
     } catch (error) {
-        console.error('Error fetching bid history:', error);
+        console.error('Error fetching bid history:', error.message);
         return { success: false, error: error.message };
     }
 }
 
 /**
- * Fetch status lelang dari API lelang.go.id
+ * Fetch status lelang dari API lelang.go.id (OPTIMIZED with timeout)
  */
 async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null) {
     try {
         const headers = {
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Authorization': `Bearer ${bearerToken}`,
+            'Accept': 'application/json',
             'Origin': 'https://lelang.go.id',
             'Referer': 'https://lelang.go.id/',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"macOS"',
         };
 
-        if (cookies) {
-            headers['Cookie'] = cookies;
-        }
+        if (cookies) headers['Cookie'] = cookies;
+        if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
 
-        if (bearerToken) {
-            headers['Authorization'] = `Bearer ${bearerToken}`;
-        }
-
-        const response = await fetch(
+        const response = await fetchWithTimeout(
             `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`,
-            { headers, method: "GET" }
+            { headers, method: "GET" },
+            4000 // 4 detik timeout
         );
 
         if (!response.ok) {
@@ -119,97 +163,136 @@ async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null)
         const data = await response.json();
         return { success: true, data };
     } catch (error) {
-        console.error('Error fetching auction status:', error);
+        console.error('Error fetching auction status:', error.message);
         return { success: false, error: error.message };
     }
 }
 
 /**
- * Kirim bid ke API lelang.go.id
+ * Start bid session dengan cache yang lebih lama (15 menit)
  */
-async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
+async function startBidSessionOptimized(auctionId, cookies, bearerToken) {
+    const auctionIdStr = String(auctionId);
+    const now = Date.now();
+    const cached = bidSessionCache.get(auctionIdStr);
+
+    // Reuse session jika masih valid (15 menit)
+    if (cached && now < cached.expiry) {
+        return { success: true, cached: true };
+    }
+
+    const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    };
+    if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
+    if (cookies) headers['Cookie'] = cookies;
+
     try {
-        const headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-            'Origin': 'https://lelang.go.id',
-            'Referer': 'https://lelang.go.id/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"macOS"'
-        };
-
-        if (bearerToken) {
-            headers['Authorization'] = `Bearer ${bearerToken}`;
-        }
-
-        if (cookies) {
-            headers['Cookie'] = cookies;
-        }
-
-        console.log('=== Starting Bid Process ===');
-        console.log('Auction ID:', auctionId);
-        console.log('Amount:', amount);
-        console.log('Passkey:', passkey);
-
-        // 1. Mulai sesi bid
-        const startSessionPayload = {
-            auctionId: String(auctionId) // Pastikan string
-        };
-
-        console.log('Start session payload:', JSON.stringify(startSessionPayload));
-
-        const startSessionResponse = await fetch(
+        const response = await fetchWithTimeout(
             'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/mulai-sesi',
             {
                 method: 'POST',
-                headers: headers,
-                body: JSON.stringify(startSessionPayload)
-            }
+                headers,
+                body: JSON.stringify({ auctionId: auctionIdStr })
+            },
+            3000 // 3 detik timeout
         );
 
-        const startSessionText = await startSessionResponse.text();
-        console.log('Start session response status:', startSessionResponse.status);
-        console.log('Start session response:', startSessionText);
+        if (response.ok) {
+            bidSessionCache.set(auctionIdStr, {
+                timestamp: now,
+                expiry: now + 900000 // 15 menit
+            });
+            return { success: true, cached: false };
+        }
+        throw new Error(`Session start failed: ${response.status}`);
+    } catch (error) {
+        console.error('Session start error:', error.message);
+        return { success: false, error: error.message };
+    }
+}
 
-        if (!startSessionResponse.ok) {
-            throw new Error(`Failed to start session: ${startSessionResponse.status} - ${startSessionText}`);
+/**
+ * Kirim bid ke API lelang.go.id (ULTRA OPTIMIZED)
+ * - Session cache 15 menit (bukan 5 menit)
+ * - Timeout protection
+ * - Minimal headers
+ */
+async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
+    const startTime = Date.now();
+    const auctionIdStr = String(auctionId);
+    
+    const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Origin': 'https://lelang.go.id',
+        'Referer': 'https://lelang.go.id/',
+    };
+    if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
+    if (cookies) headers['Cookie'] = cookies;
+
+    const bidPayload = JSON.stringify({
+        auctionId: auctionIdStr,
+        bidAmount: parseInt(amount),
+        bidTime: new Date().toISOString(),
+        passkey: String(passkey)
+    });
+
+    try {
+        // Cek session cache (15 menit)
+        const cached = bidSessionCache.get(auctionIdStr);
+        const now = Date.now();
+        const hasValidSession = cached && now < cached.expiry;
+
+        // Fast path: session valid, langsung bid
+        if (hasValidSession) {
+            try {
+                const bidResponse = await fetchWithTimeout(
+                    'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/pengajuan-penawaran',
+                    { method: 'POST', headers, body: bidPayload },
+                    5000 // 5 detik timeout
+                );
+                
+                if (bidResponse.ok) {
+                    const result = await bidResponse.json();
+                    console.log(`⚡ Bid success (cached session) in ${Date.now() - startTime}ms | Amount: ${amount}`);
+                    return { success: true, result };
+                }
+                
+                // Session expired, hapus cache
+                bidSessionCache.delete(auctionIdStr);
+            } catch (error) {
+                // Timeout atau error, coba start session baru
+                bidSessionCache.delete(auctionIdStr);
+            }
         }
 
-        // 2. Kirim bid
-        const bidPayload = {
-            auctionId: String(auctionId),
-            bidAmount: parseInt(amount),
-            bidTime: new Date().toISOString(),
-            passkey: String(passkey)
-        };
+        // Start session baru
+        const sessionResult = await startBidSessionOptimized(auctionIdStr, cookies, bearerToken);
+        if (!sessionResult.success) {
+            throw new Error(sessionResult.error || 'Failed to start session');
+        }
 
-        console.log('Bid payload:', JSON.stringify(bidPayload));
-
-        const bidResponse = await fetch(
+        // Kirim bid setelah session
+        const bidResponse = await fetchWithTimeout(
             'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/pengajuan-penawaran',
-            {
-                method: 'POST',
-                headers: headers,
-                body: JSON.stringify(bidPayload)
-            }
+            { method: 'POST', headers, body: bidPayload },
+            5000 // 5 detik timeout
         );
-
-        const bidText = await bidResponse.text();
-        console.log('Bid response status:', bidResponse.status);
-        console.log('Bid response:', bidText);
 
         if (!bidResponse.ok) {
-            throw new Error(`Bid failed: ${bidResponse.status} - ${bidText}`);
+            const errText = await bidResponse.text();
+            bidSessionCache.delete(auctionIdStr);
+            throw new Error(`Bid failed: ${bidResponse.status} - ${errText}`);
         }
 
-        const result = JSON.parse(bidText);
+        const result = await bidResponse.json();
+        console.log(`✅ Bid success in ${Date.now() - startTime}ms | Amount: ${amount}`);
         return { success: true, result };
 
     } catch (error) {
-        console.error('Error sending bid:', error);
+        console.error(`❌ Bid error in ${Date.now() - startTime}ms:`, error.message);
         return { success: false, error: error.message };
     }
 }
@@ -433,15 +516,21 @@ bot.onText(/\/status/, async (msg) => {
 // Command: /bid - Kirim bid dengan kelipatan bid otomatis
 bot.onText(/\/bid (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
-    const input = match[1].trim();
+    const input = match[1].trim().toLowerCase();
 
-    // Cek apakah input adalah angka atau "kelipatanBid"
-    if (input.toLowerCase() === 'kelipatanbid' || input.toLowerCase() === 'kelipatan') {
-        await handleBidKelipatan(chatId);
+    // Cek jenis bid
+    if (input === 'kelipatanbid' || input === 'kelipatan' || input === '1x') {
+        await handleBidKelipatan(chatId, 1);
+    } else if (input === '10x') {
+        await handleBidKelipatan(chatId, 10);
+    } else if (input.endsWith('x') && !isNaN(parseInt(input))) {
+        // Support untuk /bid 5x, /bid 20x, dll
+        const multiplier = parseInt(input);
+        await handleBidKelipatan(chatId, multiplier);
     } else {
         const amount = parseInt(input);
         if (isNaN(amount)) {
-            bot.sendMessage(chatId, '❌ Nominal bid tidak valid!\n\n*Cara penggunaan:*\n• `/bid <nominal>` - Bid dengan nominal tertentu\n• `/bid kelipatanBid` - Bid otomatis sesuai kelipatan', {
+            bot.sendMessage(chatId, '❌ Nominal bid tidak valid!\n\n*Cara penggunaan:*\n• `/bid <nominal>` - Bid dengan nominal tertentu\n• `/bid kelipatan` atau `/bid 1x` - Bid +1 kelipatan\n• `/bid 10x` - Bid +10 kelipatan', {
                 parse_mode: 'Markdown'
             });
             return;
@@ -493,7 +582,11 @@ bot.on('callback_query', async (callbackQuery) => {
             handleBidMenu(chatId);
             break;
         case 'bid_kelipatan':
-            await handleBidKelipatan(chatId);
+        case 'bid_1x':
+            await handleBidKelipatan(chatId, 1);
+            break;
+        case 'bid_10x':
+            await handleBidKelipatan(chatId, 10);
             break;
         case 'start_monitor':
             await startSmartMonitoring(chatId);
@@ -539,6 +632,13 @@ async function handleStatusCheck(chatId) {
             session.sessionData = {};
         }
         session.sessionData.auctionData = statusResult.data.data;
+        
+        // Cache kelipatan bid untuk fast bid
+        const kelipatanBid = parseInt(statusResult.data.data?.lotLelang?.kelipatanBid);
+        if (kelipatanBid && kelipatanBid > 0) {
+            session.sessionData.kelipatanBid = kelipatanBid;
+        }
+        
         userSessions.set(chatId, session);
     }
 
@@ -548,8 +648,11 @@ async function handleStatusCheck(chatId) {
         reply_markup: {
             inline_keyboard: [
                 [
-                    { text: "💰 Bid Manual", callback_data: "bid_menu" },
-                    { text: "🔢 Bid Kelipatan", callback_data: "bid_kelipatan" }
+                    { text: "🔢 Bid +1x", callback_data: "bid_1x" },
+                    { text: "🔟 Bid +10x", callback_data: "bid_10x" }
+                ],
+                [
+                    { text: "💰 Bid Manual", callback_data: "bid_menu" }
                 ],
                 [
                     { text: "🔄 Refresh", callback_data: "check_status" },
@@ -622,120 +725,111 @@ async function handleBid(chatId, amount) {
     }
 }
 
-async function handleBidKelipatan(chatId) {
+async function handleBidKelipatan(chatId, multiplier = 1) {
+    const startTime = Date.now();
     const session = userSessions.get(chatId);
 
-    if (!session || !session.auctionId) {
+    if (!session?.auctionId) {
         bot.sendMessage(chatId, '❌ Auction ID belum di-set!\n\nGunakan: `/setauction <auction_id>`', {
             parse_mode: 'Markdown'
         });
         return;
     }
 
-    // Ambil status lelang terbaru
-    bot.sendMessage(chatId, '🔄 Mengambil info kelipatan bid dan riwayat...');
-
-    const statusResult = await fetchAuctionStatus(
-        session.auctionId,
-        session.cookies,
-        session.bearerToken
-    );
-
-    if (!statusResult.success || !statusResult.data || !statusResult.data.data) {
-        bot.sendMessage(chatId, `❌ Gagal mengambil info lelang!\n\nError: ${statusResult.error}\n\nSilakan coba lagi atau gunakan /bid <nominal> untuk bid manual.`, {
+    // Validasi session lengkap
+    if (!session.cookies || !session.bearerToken || !session.passBidding) {
+        bot.sendMessage(chatId, '❌ Session belum lengkap! Pastikan sudah set cookies, token, dan passBidding.', {
             parse_mode: 'Markdown'
         });
         return;
     }
 
-    const data = statusResult.data.data;
-    const lot = data?.lotLelang;
-
-    if (!lot) {
-        bot.sendMessage(chatId, '❌ Data lot tidak ditemukan!');
-        return;
-    }
-
-    // Ambil kelipatan bid
-    const kelipatanBid = parseInt(lot?.kelipatanBid);
-    const nilaiLimit = lot.nilaiLimit ? parseInt(lot.nilaiLimit.toString().replace(/\D/g, '')) : 0;
-
-    if (!kelipatanBid || kelipatanBid <= 0) {
-        bot.sendMessage(chatId, '❌ Kelipatan bid tidak valid!\n\nSilakan gunakan /bid <nominal> untuk bid manual.', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    // Ambil riwayat bid untuk mendapatkan harga tertinggi
+    // OPTIMIZED: Langsung ambil history (tidak perlu tunggu status)
+    // Gunakan kelipatan bid yang sudah di-cache dari session sebelumnya
     const historyResult = await fetchBidHistory(
         session.auctionId,
         session.cookies,
         session.bearerToken
     );
 
-    let hargaTertinggi = nilaiLimit; // Default ke nilai limit jika belum ada bid
-
-    if (historyResult.success && historyResult.data.data) {
-        console.log('=== DEBUG RIWAYAT BID ===');
-        console.log('Full response:', JSON.stringify(historyResult.data.data, null, 2));
-
-        // Response bisa langsung array atau wrapped di dalam data
-        let riwayat = historyResult.data.data;
-
-        // Cek jika response wrapped dalam object dengan key 'data'
-        if (riwayat.data && Array.isArray(riwayat.data)) {
-            riwayat = riwayat.data;
-            console.log('Response wrapped, mengambil dari .data');
-        }
-
-        console.log('Is Array?', Array.isArray(riwayat));
-        console.log('Length:', Array.isArray(riwayat) ? riwayat.length : 'N/A');
-
-        // Ambil bid tertinggi dari riwayat (index 0 karena sudah terurut dari tertinggi)
-        if (Array.isArray(riwayat) && riwayat.length > 0) {
-            console.log('Item pertama (tertinggi):', JSON.stringify(riwayat[0], null, 2));
-            const bidTertinggi = riwayat[0];
-
-            if (bidTertinggi.bidAmount) {
-                hargaTertinggi = parseInt(bidTertinggi.bidAmount);
-                console.log('✅ Harga tertinggi berhasil diambil:', hargaTertinggi);
-            } else {
-                console.log('❌ bidAmount tidak ditemukan di object');
-            }
-        } else {
-            console.log('❌ Riwayat kosong atau bukan array');
-            console.log('Type of riwayat:', typeof riwayat);
-        }
-    } else {
-        console.log('❌ Gagal ambil riwayat, menggunakan nilai limit sebagai default');
-        console.log('Error:', historyResult.error);
+    if (!historyResult.success) {
+        bot.sendMessage(chatId, `❌ Gagal mengambil riwayat bid!\n\nError: ${historyResult.error}`, {
+            parse_mode: 'Markdown'
+        });
+        return;
     }
 
-    console.log('=== PERHITUNGAN BID ===');
-    console.log('Nilai Limit:', nilaiLimit);
-    console.log('Harga Tertinggi (final):', hargaTertinggi);
-    console.log('Kelipatan Bid:', kelipatanBid);
+    // Parse harga tertinggi dari riwayat
+    let hargaTertinggi = 0;
+    let riwayat = historyResult.data?.data;
+    
+    if (riwayat?.data && Array.isArray(riwayat.data)) {
+        riwayat = riwayat.data;
+    }
+    
+    if (Array.isArray(riwayat) && riwayat.length > 0 && riwayat[0]?.bidAmount) {
+        hargaTertinggi = parseInt(riwayat[0].bidAmount);
+    }
 
-    // Hitung nominal bid: harga tertinggi saat ini + kelipatan bid
-    const bidAmount = hargaTertinggi + kelipatanBid;
+    // Gunakan kelipatan bid dari cache session (jika ada)
+    // Jika tidak ada, ambil dari status (fallback)
+    let kelipatanBid = session.sessionData?.kelipatanBid;
+    
+    if (!kelipatanBid || kelipatanBid <= 0) {
+        // Fallback: ambil dari status jika belum di-cache
+        const statusResult = await fetchAuctionStatus(
+            session.auctionId,
+            session.cookies,
+            session.bearerToken
+        );
+        
+        if (statusResult.success && statusResult.data?.data?.lotLelang) {
+            kelipatanBid = parseInt(statusResult.data.data.lotLelang.kelipatanBid);
+            
+            // Cache kelipatan bid untuk next time
+            if (!session.sessionData) session.sessionData = {};
+            session.sessionData.kelipatanBid = kelipatanBid;
+            userSessions.set(chatId, session);
+        }
+        
+        if (!kelipatanBid || kelipatanBid <= 0) {
+            bot.sendMessage(chatId, '❌ Kelipatan bid tidak valid!', { parse_mode: 'Markdown' });
+            return;
+        }
+    }
 
-    console.log('Bid Amount (hasil):', bidAmount);
-    console.log('=========================');
+    // Hitung nominal bid
+    const bidAmount = hargaTertinggi + (kelipatanBid * multiplier);
 
-    // Info sebelum bid
-    const infoMessage = `💰 *Bid Dengan Kelipatan*\n\n` +
-        `📊 Info:\n` +
-        `• Nilai Limit: Rp ${nilaiLimit.toLocaleString('id-ID')}\n` +
-        `• Harga Tertinggi: Rp ${hargaTertinggi.toLocaleString('id-ID')}\n` +
-        `• Kelipatan Bid: Rp ${kelipatanBid.toLocaleString('id-ID')}\n` +
-        `• Nominal Bid Anda: Rp ${bidAmount.toLocaleString('id-ID')}\n\n` +
-        `🔄 Mengirim bid...`;
+    // Kirim bid langsung
+    const bidResult = await sendBidToAPI(
+        session.auctionId,
+        session.passBidding,
+        bidAmount,
+        session.cookies,
+        session.bearerToken
+    );
 
-    await bot.sendMessage(chatId, infoMessage, { parse_mode: 'Markdown' });
+    const elapsed = Date.now() - startTime;
 
-    // Langsung kirim bid tanpa konfirmasi
-    await handleBid(chatId, bidAmount);
+    if (bidResult.success) {
+        bot.sendMessage(chatId, 
+            `✅ *Bid +${multiplier}x Berhasil!* ⚡ ${elapsed}ms\n\n` +
+            `• Harga Sebelumnya: Rp ${hargaTertinggi.toLocaleString('id-ID')}\n` +
+            `• Nominal Bid: Rp ${bidAmount.toLocaleString('id-ID')}`, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "🔢 +1x", callback_data: "bid_1x" }, { text: "🔟 +10x", callback_data: "bid_10x" }],
+                    [{ text: "📊 Status", callback_data: "check_status" }]
+                ]
+            }
+        });
+    } else {
+        bot.sendMessage(chatId, `❌ *Bid Gagal!* ⚡ ${elapsed}ms\n\nError: ${bidResult.error}`, {
+            parse_mode: 'Markdown'
+        });
+    }
 }
 
 function handleBidMenu(chatId) {
@@ -850,11 +944,12 @@ async function startSmartMonitoring(chatId) {
                 }
             }
 
-            // Monitor bid history
+            // Monitor bid history (pakai cache untuk hemat request)
             const historyResult = await fetchBidHistory(
                 session.auctionId,
                 session.cookies,
-                session.bearerToken
+                session.bearerToken,
+                true // useCache = true untuk monitoring
             );
 
             if (historyResult.success && historyResult.data && historyResult.data.data) {
@@ -1001,18 +1096,20 @@ function handleHelp(chatId) {
 • \`/help\` - Bantuan ini
 • \`/status\` - Cek status lelang
 • \`/bid <nominal>\` - Kirim bid manual
-• \`/bid kelipatanBid\` - Bid otomatis (limit + kelipatan)
+• \`/bid 1x\` - Bid +1 kelipatan
+• \`/bid 10x\` - Bid +10 kelipatan
+• \`/bid 5x\` - Bid +5 kelipatan (dst)
 • \`/monitor\` - Start monitoring
 • \`/stopmonitor\` - Stop monitoring
 
 *Cara Kerja Bid Kelipatan:*
 Bot akan otomatis menghitung:
-Nominal Bid = Nilai Limit + Kelipatan Bid
+Nominal Bid = Harga Tertinggi + (Kelipatan × Multiplier)
 
-Contoh:
-• Nilai Limit: Rp 10.000.000
-• Kelipatan Bid: Rp 50.000
-• Nominal Bid: Rp 10.050.000
+Contoh /bid 10x:
+• Harga Tertinggi: Rp 10.000.000
+• Kelipatan Bid: Rp 50.000 × 10 = Rp 500.000
+• Nominal Bid: Rp 10.500.000
 
 *Cara Kerja Bot:*
 Bot ini terhubung langsung ke API lelang.go.id untuk:
@@ -1025,7 +1122,7 @@ Bot ini terhubung langsung ke API lelang.go.id untuk:
 ✅ Lebih stabil
 ✅ Lebih cepat
 ✅ Bisa dari mana saja
-✅ Bid kelipatan otomatis
+✅ Bid kelipatan otomatis (1x, 10x, dst)
 
 *Tips:*
 • Token & cookies hanya valid beberapa jam, perlu di-update berkala
@@ -1033,7 +1130,7 @@ Bot ini terhubung langsung ke API lelang.go.id untuk:
 • Pass bidding adalah PIN yang Anda gunakan di website
 • Gunakan /monitor untuk notifikasi otomatis
 • Pastikan sudah membayar uang jaminan sebelum bid
-• Bid kelipatan lebih cepat dan praktis`;
+• Gunakan /bid 10x untuk loncat 10 kelipatan sekaligus`;
 
     bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown'
