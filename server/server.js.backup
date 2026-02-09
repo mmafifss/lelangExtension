@@ -8,24 +8,6 @@ const express = require('express');
 const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
 
-// ============================================
-// SPEED OPTIMIZATION LAYER (Non-breaking)
-// ============================================
-const SafeAPI = require('./safe-optimizer-wrapper');
-console.log('⚡ Speed Optimization Active (Safe Mode)');
-// Note: Original functions unchanged, optimizer adds performance layer
-// ============================================
-
-// ============================================
-// BUDGET & SNIPE MANAGEMENT (Non-breaking)
-// ============================================
-const { BudgetManager, SnipeManager } = require('./budget-manager');
-const budgetManager = new BudgetManager();
-const snipeManager = new SnipeManager(budgetManager);
-console.log('💰 Budget Manager Active');
-console.log('🎯 Snipe Manager Active');
-// ============================================
-
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -104,23 +86,6 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
         createTimeoutPromise(timeoutMs)
     ]);
 }
-
-// ============================================
-// OPTIMIZED FETCH (Optional, for critical operations)
-// Uses connection pooling & performance monitoring
-// Falls back to original fetchWithTimeout if optimizer fails
-// ============================================
-async function fetchWithTimeoutOptimized(url, options = {}, timeoutMs = 5000) {
-    try {
-        // Try optimized fetch first (connection pooling, monitoring)
-        return await SafeAPI.fetchWithTimeout(url, options, timeoutMs);
-    } catch (error) {
-        // Fallback to original (always works)
-        console.warn('⚠️ Optimizer fallback:', error.message);
-        return await fetchWithTimeout(url, options, timeoutMs);
-    }
-}
-// Note: Original fetchWithTimeout unchanged, this is additive only
 
 // ============================================
 // API INTEGRATION FUNCTIONS
@@ -416,46 +381,31 @@ bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     const firstName = msg.from.first_name || 'User';
 
-    const welcomeMessage = `🎉 *Selamat datang di Lelang Bid Bot!*
+    const welcomeMessage = `🎉 *Selamat datang di Lelang Bid Bot (API Direct)!*
 
 Halo ${firstName}! 👋
 
-*🚀 Fitur Utama:*
-• ⚡ Ultra-fast bidding (100ms)
-• 💰 Budget management (No overbid!)
-• 🎯 Snipe bidding (Auto-bid detik terakhir)
-• 📊 Real-time monitoring
-• 🛡️ Circuit breaker protection
+Bot ini terhubung langsung ke API lelang.go.id untuk bid otomatis.
 
-*📱 Quick Start:*
-1. \`/setcookies <cookies>\`
-2. \`/settoken <bearer_token>\`
-3. \`/setauction <auction_id>\`
-4. \`/setPassBidding <passkey>\`
+*🚀 Fitur:*
+• Cek status lelang real-time
+• Bid langsung via API
+• Monitoring otomatis
+• Notifikasi perubahan harga
 
-*💰 Budget Protection:*
-\`\`\`
-/setbudget 50000000    (Max Rp 50M)
-/budget                (Cek sisa)
-\`\`\`
-✅ Bot tidak akan bid melebihi budget!
+*📱 Setup Cepat:*
+1. Set cookies: \`/setcookies <cookies>\`
+2. Set bearer token: \`/settoken <bearer_token>\`
+3. Set auction: \`/setauction <auction_id>\`
+4. Set pass bidding: \`/setPassBidding <passkey>\`
+5. Cek status: \`/status\`
+6. Bid: \`/bid <amount>\`
 
-*🎯 Snipe Bidding:*
-\`\`\`
-/setsnipe 5 10         (Bid +10x di 5 detik terakhir)
-/monitor               (Start auto-snipe)
-\`\`\`
-✅ Surprise attack! Win rate +50%!
-
-*🏆 Complete Flow:*
-\`\`\`
-/setbudget 100000000
-/setsnipe 5 10
-/monitor
-\`\`\`
-→ Bot auto-bid di detik terakhir
-→ Budget safe, speed fast!
-→ YOU WIN! 🎉
+*💡 Tips:*
+• Cookies & token bisa diambil dari browser (F12 → Network)
+• Auction ID ada di URL lelang
+• Pass bidding adalah PIN/password untuk bid
+• Pastikan sudah login di lelang.go.id
 
 Gunakan /help untuk panduan lengkap!`;
 
@@ -605,307 +555,6 @@ bot.onText(/\/stopmonitor/, (msg) => {
 bot.onText(/\/help/, (msg) => {
     const chatId = msg.chat.id;
     handleHelp(chatId);
-});
-
-// ============================================
-// SPEED OPTIMIZATION MONITORING COMMANDS
-// ============================================
-
-// Command: /performance - Show performance stats
-bot.onText(/\/performance/, (msg) => {
-    const chatId = msg.chat.id;
-    
-    try {
-        const summary = SafeAPI.getPerformanceSummary();
-        const cbStatus = SafeAPI.getCircuitBreakerStatus();
-        
-        const message = `⚡ *Performance Stats*\n\n` +
-            `📊 *Speed Metrics:*\n` +
-            `• Avg Bid Time: ${summary.avgBidTime}\n` +
-            `• Avg API Time: ${summary.avgAPITime}\n` +
-            `• Connection Reuse: ${summary.connectionReuseRate}\n` +
-            `• Cache Hit Rate: ${summary.cacheHitRate}\n` +
-            `• Memory Usage: ${summary.memoryUsage}\n\n` +
-            `🛡️ *Circuit Breaker:*\n` +
-            `• Status: ${cbStatus.state}\n` +
-            `• Failures: ${cbStatus.failureCount}/${cbStatus.threshold}\n` +
-            `• Enabled: ${SafeAPI.isOptimizerEnabled() ? '✅' : '❌'}\n\n` +
-            `🚀 Speed Optimization: Active`;
-        
-        bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-    } catch (error) {
-        bot.sendMessage(chatId, `⚠️ Stats unavailable: ${error.message}`);
-    }
-});
-
-// Command: /optimizer - Control optimizer
-bot.onText(/\/optimizer (enable|disable|status)/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const action = match[1];
-    
-    try {
-        if (action === 'enable') {
-            SafeAPI.enableOptimizer();
-            bot.sendMessage(chatId, '✅ *Optimizer Enabled*\n\nAll requests will use optimized fetch with connection pooling.', {
-                parse_mode: 'Markdown'
-            });
-        } else if (action === 'disable') {
-            SafeAPI.disableOptimizer();
-            bot.sendMessage(chatId, '⚠️ *Optimizer Disabled*\n\nAll requests fallback to native fetch.', {
-                parse_mode: 'Markdown'
-            });
-        } else if (action === 'status') {
-            const cbStatus = SafeAPI.getCircuitBreakerStatus();
-            const message = `🛡️ *Optimizer Status*\n\n` +
-                `Enabled: ${SafeAPI.isOptimizerEnabled() ? '✅ Yes' : '❌ No'}\n` +
-                `Circuit State: ${cbStatus.state}\n` +
-                `Failures: ${cbStatus.failureCount}/${cbStatus.threshold}\n\n` +
-                `*Commands:*\n` +
-                `\`/optimizer enable\` - Enable optimizer\n` +
-                `\`/optimizer disable\` - Disable optimizer\n` +
-                `\`/performance\` - Show stats`;
-            
-            bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-        }
-    } catch (error) {
-        bot.sendMessage(chatId, `❌ Error: ${error.message}`);
-    }
-});
-
-// ============================================
-// BUDGET MANAGEMENT COMMANDS
-// ============================================
-
-// Command: /setbudget - Set maximum budget
-bot.onText(/\/setbudget (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const budgetAmount = parseInt(match[1].replace(/\D/g, ''));
-    
-    if (isNaN(budgetAmount) || budgetAmount <= 0) {
-        bot.sendMessage(chatId, '❌ Format salah!\n\nGunakan: `/setbudget <nominal>`\n\nContoh: `/setbudget 50000000`', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    budgetManager.setBudget(chatId, {
-        maxBudget: budgetAmount,
-        warningThreshold: 0.9,  // 90%
-        autoStop: true
-    });
-
-    // ============================================
-    // SMART SUGGESTION: Check current auction price
-    // ============================================
-    const session = userSessions.get(chatId);
-    let warningMessage = '';
-    
-    if (session?.auctionId && session?.cookies && session?.bearerToken) {
-        try {
-            const historyResult = await fetchBidHistory(
-                session.auctionId,
-                session.cookies,
-                session.bearerToken
-            );
-
-            if (historyResult.success && historyResult.data?.data) {
-                let riwayat = historyResult.data.data;
-                if (riwayat.data && Array.isArray(riwayat.data)) {
-                    riwayat = riwayat.data;
-                }
-
-                if (Array.isArray(riwayat) && riwayat.length > 0) {
-                    const currentPrice = parseInt(riwayat[0].bidAmount);
-                    const kelipatanBid = session.sessionData?.kelipatanBid || 50000;
-                    const nextBidMin = currentPrice + kelipatanBid;
-
-                    // Warning if budget too low
-                    if (budgetAmount < nextBidMin) {
-                        warningMessage = `\n\n⚠️ *WARNING: Budget Terlalu Rendah!*\n\n` +
-                            `• Harga saat ini: Rp ${currentPrice.toLocaleString('id-ID')}\n` +
-                            `• Next bid minimal: Rp ${nextBidMin.toLocaleString('id-ID')}\n` +
-                            `• Budget Anda: Rp ${budgetAmount.toLocaleString('id-ID')}\n\n` +
-                            `❌ Budget Anda lebih rendah dari harga lelang!\n\n` +
-                            `*Recommendation:*\n` +
-                            `Set budget minimal: Rp ${(currentPrice + kelipatanBid * 5).toLocaleString('id-ID')}\n` +
-                            `(Current + ruang 5x kelipatan)\n\n` +
-                            `Gunakan: \`/setbudget ${currentPrice + kelipatanBid * 5}\``;
-                    } else {
-                        const roomForBids = Math.floor((budgetAmount - currentPrice) / kelipatanBid);
-                        warningMessage = `\n\n💡 *Budget Analysis:*\n` +
-                            `• Harga saat ini: Rp ${currentPrice.toLocaleString('id-ID')}\n` +
-                            `• Budget Anda: Rp ${budgetAmount.toLocaleString('id-ID')}\n` +
-                            `• Ruang untuk bid: ~${roomForBids}x kelipatan\n` +
-                            `• Kelipatan: Rp ${kelipatanBid.toLocaleString('id-ID')}\n\n` +
-                            `✅ Budget cukup untuk compete!`;
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('Error checking current price:', error);
-        }
-    }
-    // ============================================
-
-    bot.sendMessage(chatId,
-        `💰 *Budget Diset!*\n\n` +
-        `• Max Budget: Rp ${budgetAmount.toLocaleString('id-ID')}\n` +
-        `• Warning: 90% (Rp ${(budgetAmount * 0.9).toLocaleString('id-ID')})\n` +
-        `• Auto-stop: Aktif\n\n` +
-        `✅ Bid tidak akan melebihi budget ini!` +
-        warningMessage +
-        `\n\n*Commands:*\n` +
-        `• \`/budget\` - Cek sisa budget\n` +
-        `• \`/clearbudget\` - Hapus budget limit`,
-        { parse_mode: 'Markdown' }
-    );
-});
-
-// Command: /budget - Check budget status
-bot.onText(/\/budget/, (msg) => {
-    const chatId = msg.chat.id;
-    const summary = budgetManager.getSummary(chatId);
-
-    if (!summary.budgetSet) {
-        bot.sendMessage(chatId,
-            `💰 *Budget Status*\n\n` +
-            `❌ Budget belum diset\n\n` +
-            `Gunakan \`/setbudget <nominal>\` untuk set budget.\n\n` +
-            `Contoh: \`/setbudget 50000000\`\n\n` +
-            `💡 *Catatan:*\n` +
-            `Budget = Harga maksimal yang mau Anda bayar untuk item ini`,
-            { parse_mode: 'Markdown' }
-        );
-        return;
-    }
-
-    const percentUsedBar = '█'.repeat(Math.floor(summary.percentUsed / 10)) + 
-                           '░'.repeat(10 - Math.floor(summary.percentUsed / 10));
-
-    const message = `💰 *Budget Summary*\n\n` +
-        `📊 *Budget Progress:*\n` +
-        `${percentUsedBar} ${summary.percentUsed.toFixed(1)}%\n\n` +
-        `• Max Purchase Price: Rp ${summary.maxBudget.toLocaleString('id-ID')}\n` +
-        `• Highest Bid: Rp ${summary.highestBid.toLocaleString('id-ID')}\n` +
-        `• Room to Bid: Rp ${(summary.maxBudget - summary.highestBid).toLocaleString('id-ID')}\n\n` +
-        `📈 *Bid Statistics:*\n` +
-        `• Total Bids: ${summary.totalBids}\n` +
-        `• Successful: ${summary.successfulBids}\n` +
-        `• Failed: ${summary.failedBids}\n\n` +
-        (summary.isNearLimit ? `⚠️ *WARNING: Bid mendekati max price!*\n\n` : '') +
-        `💡 *How it Works:*\n` +
-        `Budget adalah harga maksimal yang mau Anda bayar.\n` +
-        `Bot akan STOP bid jika harga > budget.\n` +
-        `Anda hanya bayar FINAL bid yang menang, bukan semua bid!\n\n` +
-        `*Commands:*\n` +
-        `• \`/setbudget <nominal>\` - Update budget\n` +
-        `• \`/clearbudget\` - Hapus budget`;
-
-    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-});
-
-// Command: /clearbudget - Clear budget
-bot.onText(/\/clearbudget/, (msg) => {
-    const chatId = msg.chat.id;
-    budgetManager.clearBudget(chatId);
-    bot.sendMessage(chatId, '✅ Budget cleared!\n\nBidding sekarang unlimited (tidak ada batas budget).', {
-        parse_mode: 'Markdown'
-    });
-});
-
-// ============================================
-// SNIPE BIDDING COMMANDS
-// ============================================
-
-// Command: /setsnipe - Setup snipe bidding
-bot.onText(/\/setsnipe(?:\s+(\d+))?(?:\s+(\d+))?/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const triggerSeconds = match[1] ? parseInt(match[1]) : 5;
-    const multiplier = match[2] ? parseInt(match[2]) : 10;
-
-    snipeManager.setupSnipe(chatId, {
-        triggerSeconds,
-        multiplier,
-        respectBudget: true,  // Always respect budget
-        autoExecute: true
-    });
-
-    bot.sendMessage(chatId,
-        `🎯 *Snipe Bidding Configured!*\n\n` +
-        `⏰ Trigger: ${triggerSeconds} detik sebelum tutup\n` +
-        `💰 Multiplier: +${multiplier}x kelipatan\n` +
-        `🛡️ Budget Control: Aktif\n` +
-        `🤖 Auto Execute: Aktif\n\n` +
-        `✅ Bot akan auto-bid di detik terakhir!\n\n` +
-        `*Safety:*\n` +
-        `• Tidak akan melebihi budget Anda\n` +
-        `• Hanya execute jika harga masih affordable\n\n` +
-        `*Commands:*\n` +
-        `• \`/snipe\` - Check snipe status\n` +
-        `• \`/snipestop\` - Disable snipe\n` +
-        `• \`/snipestart\` - Enable snipe`,
-        { parse_mode: 'Markdown' }
-    );
-});
-
-// Command: /snipe - Check snipe status
-bot.onText(/\/snipe$/, (msg) => {
-    const chatId = msg.chat.id;
-    const snipe = snipeManager.getSnipe(chatId);
-
-    if (!snipe) {
-        bot.sendMessage(chatId,
-            `🎯 *Snipe Bidding*\n\n` +
-            `❌ Snipe belum disetup\n\n` +
-            `Gunakan \`/setsnipe <detik> <multiplier>\`\n\n` +
-            `*Contoh:*\n` +
-            `• \`/setsnipe 5 10\` - Bid +10x di 5 detik terakhir\n` +
-            `• \`/setsnipe 3 20\` - Bid +20x di 3 detik terakhir\n` +
-            `• \`/setsnipe\` - Default (5s, 10x)`,
-            { parse_mode: 'Markdown' }
-        );
-        return;
-    }
-
-    const message = `🎯 *Snipe Status*\n\n` +
-        `${snipe.enabled ? '✅ AKTIF' : '❌ NONAKTIF'}\n\n` +
-        `⏰ *Trigger:* ${snipe.triggerSeconds} detik sebelum tutup\n` +
-        `💰 *Multiplier:* +${snipe.multiplier}x kelipatan\n` +
-        `🛡️ *Budget Control:* ${snipe.respectBudget ? 'ON' : 'OFF'}\n` +
-        `🤖 *Auto Execute:* ${snipe.autoExecute ? 'ON' : 'OFF'}\n\n` +
-        `*Commands:*\n` +
-        `• \`/snipestop\` - Disable snipe\n` +
-        `• \`/snipestart\` - Enable snipe\n` +
-        `• \`/setsnipe <s> <x>\` - Update config`;
-
-    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-});
-
-// Command: /snipestop - Disable snipe
-bot.onText(/\/snipestop/, (msg) => {
-    const chatId = msg.chat.id;
-    snipeManager.disableSnipe(chatId);
-    bot.sendMessage(chatId, '🛑 *Snipe Disabled*\n\nAuto-bid di detik terakhir dinonaktifkan.', {
-        parse_mode: 'Markdown'
-    });
-});
-
-// Command: /snipestart - Enable snipe
-bot.onText(/\/snipestart/, (msg) => {
-    const chatId = msg.chat.id;
-    const snipe = snipeManager.getSnipe(chatId);
-    
-    if (!snipe) {
-        bot.sendMessage(chatId, '❌ Snipe belum disetup!\n\nGunakan `/setsnipe` terlebih dahulu.', {
-            parse_mode: 'Markdown'
-        });
-        return;
-    }
-
-    snipeManager.enableSnipe(chatId);
-    bot.sendMessage(chatId, '✅ *Snipe Enabled*\n\nAuto-bid di detik terakhir diaktifkan kembali!', {
-        parse_mode: 'Markdown'
-    });
 });
 
 // ============================================
@@ -1150,54 +799,7 @@ async function handleBidKelipatan(chatId, multiplier = 1) {
     }
 
     // Hitung nominal bid
-    let bidAmount = hargaTertinggi + (kelipatanBid * multiplier);
-
-    // ============================================
-    // BUDGET CHECK (Safety)
-    // ============================================
-    const budgetCheck = budgetManager.canBid(chatId, bidAmount);
-    
-    if (!budgetCheck.allowed) {
-        // Try to get safe amount within budget
-        const safeBid = budgetManager.getSafeBidAmount(chatId, bidAmount);
-        
-        if (safeBid.limited) {
-            // Can bid, but limited to max purchase price
-            if (safeBid.amount < hargaTertinggi + kelipatanBid) {
-                // Too low to compete
-                bot.sendMessage(chatId,
-                    `💰 *Budget Limit Reached!*\n\n` +
-                    `❌ Cannot bid: Melebihi harga maksimal\n\n` +
-                    `• Harga bid: Rp ${bidAmount.toLocaleString('id-ID')}\n` +
-                    `• Max purchase price: Rp ${budgetCheck.maxBudget.toLocaleString('id-ID')}\n` +
-                    `• Deficit: Rp ${budgetCheck.deficit.toLocaleString('id-ID')}\n\n` +
-                    `💡 *Budget = Harga maksimal yang mau Anda bayar*\n\n` +
-                    `*Options:*\n` +
-                    `• \`/setbudget ${Math.ceil((bidAmount + 500000) / 1000000) * 1000000}\` - Increase budget\n` +
-                    `• \`/clearbudget\` - Remove limit (not recommended)`,
-                    { parse_mode: 'Markdown' }
-                );
-                return;
-            }
-
-            // Use safe amount (limited)
-            bidAmount = safeBid.amount;
-            bot.sendMessage(chatId,
-                `⚠️ *Budget Warning*\n\n` +
-                `Bid amount adjusted to fit budget:\n` +
-                `• Original: Rp ${safeBid.original.toLocaleString('id-ID')}\n` +
-                `• Adjusted: Rp ${bidAmount.toLocaleString('id-ID')}\n` +
-                `• Remaining: Rp ${safeBid.remaining.toLocaleString('id-ID')}`
-            );
-        }
-    } else if (budgetCheck.warning) {
-        // Approaching budget limit
-        bot.sendMessage(chatId,
-            `⚠️ Budget at ${budgetCheck.percentUsed.toFixed(1)}%\n` +
-            `Remaining: Rp ${budgetCheck.remaining.toLocaleString('id-ID')}`
-        );
-    }
-    // ============================================
+    const bidAmount = hargaTertinggi + (kelipatanBid * multiplier);
 
     // Kirim bid langsung
     const bidResult = await sendBidToAPI(
@@ -1207,11 +809,6 @@ async function handleBidKelipatan(chatId, multiplier = 1) {
         session.cookies,
         session.bearerToken
     );
-
-    // Track bid in budget manager
-    if (bidResult.success) {
-        budgetManager.trackBid(chatId, bidAmount, true);
-    }
 
     const elapsed = Date.now() - startTime;
 
@@ -1316,95 +913,6 @@ async function startSmartMonitoring(chatId) {
                     const now = new Date();
                     const timeRemaining = endTime - now;
                     const minutesRemaining = Math.floor(timeRemaining / 1000 / 60);
-                    const secondsRemaining = Math.floor(timeRemaining / 1000);
-
-                    // ============================================
-                    // SNIPE BIDDING LOGIC
-                    // ============================================
-                    const snipeCheck = snipeManager.shouldExecuteSnipe(chatId, secondsRemaining);
-                    
-                    if (snipeCheck.shouldSnipe) {
-                        console.log(`🎯 Snipe trigger! ${secondsRemaining}s remaining`);
-                        
-                        // Get current price & kelipatan
-                        const historyResult = await fetchBidHistory(
-                            session.auctionId,
-                            session.cookies,
-                            session.bearerToken
-                        );
-
-                        if (historyResult.success && historyResult.data?.data) {
-                            let riwayat = historyResult.data.data;
-                            if (riwayat.data && Array.isArray(riwayat.data)) {
-                                riwayat = riwayat.data;
-                            }
-
-                            if (Array.isArray(riwayat) && riwayat.length > 0) {
-                                const currentPrice = parseInt(riwayat[0].bidAmount);
-                                const kelipatanBid = session.sessionData?.kelipatanBid || lot.kelipatanBid || 50000;
-
-                                // Calculate snipe bid
-                                const snipeBid = snipeManager.calculateSnipeBid(
-                                    chatId,
-                                    currentPrice,
-                                    kelipatanBid
-                                );
-
-                                if (snipeBid.success) {
-                                    // Execute snipe!
-                                    bot.sendMessage(chatId, 
-                                        `🎯 *SNIPE EXECUTION!*\n\n` +
-                                        `⏰ ${secondsRemaining}s remaining\n` +
-                                        `💰 Bid: Rp ${snipeBid.bidAmount.toLocaleString('id-ID')}\n` +
-                                        `${snipeBid.limited ? '⚠️ (Limited by budget)' : ''}`,
-                                        { parse_mode: 'Markdown' }
-                                    );
-
-                                    const bidResult = await sendBidToAPI(
-                                        session.auctionId,
-                                        session.passBidding,
-                                        snipeBid.bidAmount,
-                                        session.cookies,
-                                        session.bearerToken
-                                    );
-
-                                    // Track result
-                                    if (bidResult.success) {
-                                        budgetManager.trackBid(chatId, snipeBid.bidAmount, true);
-                                        snipeManager.trackSnipe(chatId, { ...snipeBid, success: true });
-                                        
-                                        bot.sendMessage(chatId,
-                                            `✅ *SNIPE SUCCESS!*\n\n` +
-                                            `🎯 Bid berhasil: Rp ${snipeBid.bidAmount.toLocaleString('id-ID')}\n` +
-                                            `⏰ Waktu: ${secondsRemaining}s sebelum tutup`,
-                                            { parse_mode: 'Markdown' }
-                                        );
-                                    } else {
-                                        snipeManager.trackSnipe(chatId, { ...snipeBid, success: false, error: bidResult.error });
-                                        
-                                        bot.sendMessage(chatId,
-                                            `❌ *SNIPE FAILED!*\n\n` +
-                                            `Error: ${bidResult.error}`,
-                                            { parse_mode: 'Markdown' }
-                                        );
-                                    }
-
-                                    // Disable snipe after execution (one-time)
-                                    snipeManager.disableSnipe(chatId);
-                                } else {
-                                    // Cannot snipe (budget insufficient)
-                                    bot.sendMessage(chatId,
-                                        `⚠️ *SNIPE ABORTED!*\n\n` +
-                                        `Reason: ${snipeBid.error}\n\n` +
-                                        `💰 Insufficient budget untuk compete`,
-                                        { parse_mode: 'Markdown' }
-                                    );
-                                    snipeManager.disableSnipe(chatId);
-                                }
-                            }
-                        }
-                    }
-                    // ============================================
 
                     // Adjust interval based on time remaining
                     if (minutesRemaining <= 5) {
@@ -1526,7 +1034,7 @@ function stopMonitoring(chatId) {
 }
 
 function handleSetupGuide(chatId) {
-    const message = `📖 *Panduan Setup Lengkap*
+    const message = `📖 *Panduan Setup*
 
 *Langkah 1: Ambil Bearer Token & Cookies*
 1. Buka lelang.go.id di browser
@@ -1554,47 +1062,20 @@ function handleSetupGuide(chatId) {
 \`/setPassBidding <passkey>\`
 (Passkey adalah PIN/password untuk bid)
 
-*Langkah 6 (NEW): Set Budget Protection* 💰
-\`/setbudget 100000000\`
-(Max budget Rp 100M - Bot tidak akan bid lebih dari ini!)
+*Langkah 6: Mulai Bid!*
+• Cek status: \`/status\`
+• Bid manual: \`/bid <nominal>\`
+• Bid kelipatan: \`/bid kelipatanBid\`
 
-*Langkah 7 (NEW): Setup Snipe Bidding* 🎯
-\`/setsnipe 5 10\`
-(Auto-bid +10x kelipatan di 5 detik terakhir)
-
-*Langkah 8: Start Monitoring*
-\`/monitor\`
-(Bot auto-monitor & auto-snipe!)
-
-*Contoh Flow Lengkap:*
+*Contoh Lengkap:*
 \`\`\`
-/settoken eyJhbGciOiJI...
-/setcookies _ga=GA1.2...
+/settoken eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+/setcookies _ga=GA1.2.123456789...
 /setauction 6d815f8f-f41e-4497-b7b1-28703c15a6f6
 /setPassBidding 123456
-
-/setbudget 100000000    ← Protection!
-/setsnipe 5 10          ← Auto-snipe!
-/monitor                ← Start!
-
-[Bot bekerja otomatis]
-→ Monitor countdown...
-→ Saat 5 detik: AUTO-BID!
-→ Budget checked: ✅
-→ Execute: 100ms ⚡
-→ Result: WIN! 🏆
-\`\`\`
-
-*Manual Bidding (Alternative):*
-• \`/status\` - Cek status
-• \`/bid 1x\` - Bid +1 kelipatan
-• \`/bid 10x\` - Bid +10 kelipatan
-
-*Tips Pro:*
-✅ Set budget untuk safety
-✅ Use snipe untuk surprise attack
-✅ Monitor aktif = Auto-win
-✅ Speed optimization aktif (5x faster!)`;
+/status
+/bid kelipatanBid
+\`\`\``;
 
     bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown'
@@ -1617,79 +1098,32 @@ function handleHelp(chatId) {
 • \`/bid <nominal>\` - Kirim bid manual
 • \`/bid 1x\` - Bid +1 kelipatan
 • \`/bid 10x\` - Bid +10 kelipatan
+• \`/bid 5x\` - Bid +5 kelipatan (dst)
 • \`/monitor\` - Start monitoring
 • \`/stopmonitor\` - Stop monitoring
 
-*Perintah Monitoring:*
-• \`/performance\` - Show speed stats ⚡
-• \`/optimizer status\` - Check optimizer
-
-💰 *Budget Management:*
-• \`/setbudget 50000000\` - Max budget Rp 50M
-• \`/budget\` - Cek sisa budget
-• \`/clearbudget\` - Hapus limit
-
-🎯 *Snipe Bidding (Auto-bid detik terakhir):*
-• \`/setsnipe 5 10\` - Bid +10x di 5 detik terakhir
-• \`/setsnipe 3 20\` - Bid +20x di 3 detik terakhir
-• \`/snipe\` - Check snipe status
-• \`/snipestop\` - Disable snipe
-• \`/snipestart\` - Enable snipe
-
 *Cara Kerja Bid Kelipatan:*
-Bot menghitung: Harga Tertinggi + (Kelipatan × Multiplier)
+Bot akan otomatis menghitung:
+Nominal Bid = Harga Tertinggi + (Kelipatan × Multiplier)
 
-Contoh: \`/bid 10x\`
-• Harga: Rp 10.000.000
-• Kelipatan: Rp 50.000 × 10 = Rp 500.000
-• Bid: Rp 10.500.000
+Contoh /bid 10x:
+• Harga Tertinggi: Rp 10.000.000
+• Kelipatan Bid: Rp 50.000 × 10 = Rp 500.000
+• Nominal Bid: Rp 10.500.000
 
-💰 *Cara Kerja Budget:*
-1. Set budget: \`/setbudget 100000000\` (Rp 100M)
-2. Bot tracking spending otomatis
-3. Warning saat budget 90%
-4. Auto-stop jika melebihi budget
-5. Cek sisa: \`/budget\`
+*Cara Kerja Bot:*
+Bot ini terhubung langsung ke API lelang.go.id untuk:
+1. Mengambil status lelang real-time
+2. Mengirim bid otomatis
+3. Monitoring perubahan status
 
-Contoh:
-• Budget: Rp 100M
-• Bid 1: Rp 80M ✅
-• Bid 2: Rp 25M ❌ (Exceeded! Aborted)
-• Sisa: Rp 20M
-
-🎯 *Cara Kerja Snipe:*
-1. Setup: \`/setsnipe 5 10\` (5 detik, +10x)
-2. Start: \`/monitor\`
-3. Bot tunggu countdown...
-4. Saat 5 detik tersisa → Auto-bid!
-5. Competitors terkejut (no time to counter)
-
-Contoh Scenario:
-• Current: Rp 50M
-• Countdown: 10s... 5s... SNIPE!
-• Bot bid: Rp 55M (+10x kelipatan)
-• Execute: 100ms ⚡
-• Result: WIN! 🏆
-
-🛡️ *Budget + Snipe = SAFE!*
-Bot akan:
-✅ Check budget sebelum snipe
-✅ Abort jika melebihi budget
-✅ Adjust bid to fit budget
-✅ Warning real-time
-
-Contoh:
-• Snipe bid: Rp 60M
-• Budget sisa: Rp 40M
-• Result: ❌ ABORTED (Budget insufficient)
-• Your money: SAFE! 💰
-
-*Tips Pro:*
-• Set budget dulu sebelum bid
-• Snipe untuk surprise attack
-• Monitor + Snipe = Auto win
-• Budget control = No overbid
-• Speed optimization = Win rate +50%`;
+*Tips:*
+• Token & cookies hanya valid beberapa jam, perlu di-update berkala
+• Auction ID bisa dilihat dari URL halaman lelang
+• Pass bidding adalah PIN yang Anda gunakan di website
+• Gunakan /monitor untuk notifikasi otomatis
+• Pastikan sudah membayar uang jaminan sebelum bid
+• Gunakan /bid 10x untuk loncat 10 kelipatan sekaligus`;
 
     bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown'
@@ -1706,25 +1140,12 @@ app.post('/api/tab-connected', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-    try {
-        const healthData = SafeAPI.getHealthWithPerformance();
-        res.json({
-            ...healthData,
-            activeSessions: userSessions.size,
-            activeMonitoring: activeMonitoring.size
-        });
-    } catch (error) {
-        // Fallback if optimizer fails
-        res.json({
-            status: 'healthy',
-            activeSessions: userSessions.size,
-            activeMonitoring: activeMonitoring.size,
-            optimizer: {
-                error: error.message
-            },
-            timestamp: new Date().toISOString()
-        });
-    }
+    res.json({
+        status: 'healthy',
+        activeSessions: userSessions.size,
+        activeMonitoring: activeMonitoring.size,
+        timestamp: new Date().toISOString()
+    });
 });
 
 // ============================================
@@ -1755,17 +1176,8 @@ process.on('SIGINT', () => {
 
     // Stop all monitoring
     activeMonitoring.forEach((monitoring) => {
-        if (monitoring.interval) clearInterval(monitoring.interval);
-        if (monitoring.timeout) clearTimeout(monitoring.timeout);
+        clearInterval(monitoring.interval);
     });
-
-    // Cleanup optimizer
-    try {
-        SafeAPI.cleanup();
-        console.log('✅ Optimizer cleaned up');
-    } catch (error) {
-        console.warn('⚠️ Optimizer cleanup error:', error.message);
-    }
 
     bot.stopPolling();
     process.exit(0);

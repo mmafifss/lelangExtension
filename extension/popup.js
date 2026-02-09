@@ -11,6 +11,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Bot Telegram Username (sudah di-set)
     const BOT_USERNAME = 'Lelangkpkbot';
 
+    // ============================================
+    // FUNGSI: AMBIL COOKIES MENGGUNAKAN CHROME API
+    // ============================================
+    async function getCookiesFromChromeAPI() {
+        try {
+            const cookies = await chrome.cookies.getAll({ 
+                domain: 'lelang.go.id' 
+            });
+            
+            // Format cookies menjadi string seperti Cookie header
+            const cookieString = cookies
+                .map(cookie => `${cookie.name}=${cookie.value}`)
+                .join('; ');
+            
+            return cookieString;
+        } catch (error) {
+            console.error('Error getting cookies from Chrome API:', error);
+            return null;
+        }
+    }
+
     // Tambahkan section untuk data Telegram Bot
     const telegramDataSection = document.createElement('div');
     telegramDataSection.className = 'info-card';
@@ -115,12 +136,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                     let telegramHTML = '<div style="line-height: 1.6;">';
 
-                    // 1. Cookies (tampilkan lengkap)
+                    // 1. Cookies (ambil dari Chrome API)
                     telegramHTML += '<div style="margin-bottom: 8px;">';
                     telegramHTML += '<strong style="color: #1976d2;">1. Cookies:</strong><br>';
-                    if (response.cookies) {
-                        telegramHTML += `<code style="font-size: 9px; background: #fff; padding: 4px; border-radius: 3px; display: block; word-break: break-all; max-height: 60px; overflow-y: auto;">${response.cookies}</code>`;
-                        telegramHTML += '<span style="color: #4caf50; font-size: 11px;">✅ Tersedia (${response.cookies.length} chars)</span>';
+                    
+                    // Prioritas: Ambil dari Chrome Cookies API
+                    const cookiesFromAPI = await getCookiesFromChromeAPI();
+                    const cookiesToDisplay = cookiesFromAPI || response.cookies;
+                    
+                    if (cookiesToDisplay) {
+                        telegramHTML += `<code style="font-size: 9px; background: #fff; padding: 4px; border-radius: 3px; display: block; word-break: break-all; max-height: 60px; overflow-y: auto;">${cookiesToDisplay}</code>`;
+                        telegramHTML += `<span style="color: #4caf50; font-size: 11px;">✅ Tersedia (${cookiesToDisplay.length} chars)${cookiesFromAPI ? ' 🍪 via Chrome API' : ''}</span>`;
                     } else {
                         telegramHTML += '<span style="color: #f44336; font-size: 11px;">❌ Tidak ditemukan</span>';
                     }
@@ -214,11 +240,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                     // ============================================
                     const copyCommandsBtn = document.getElementById('copyCommands');
                     if (copyCommandsBtn) {
-                        copyCommandsBtn.addEventListener('click', () => {
+                        copyCommandsBtn.addEventListener('click', async () => {
                             let commands = '';
 
-                            if (response.cookies) {
-                                commands += `/setcookies ${response.cookies}\n\n`;
+                            // Ambil cookies dari Chrome API atau fallback ke response.cookies
+                            const cookiesFromAPI = await getCookiesFromChromeAPI();
+                            const cookiesToUse = cookiesFromAPI || response.cookies;
+
+                            if (cookiesToUse) {
+                                commands += `/setcookies ${cookiesToUse}\n\n`;
                             }
 
                             if (response.bearerToken) {
