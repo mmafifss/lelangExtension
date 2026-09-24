@@ -39,9 +39,9 @@ if (!process.env.BOT_TOKEN || process.env.BOT_TOKEN === 'your_bot_token_here') {
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
     polling: {
-        interval: 2000,
+        interval: 1000,       // ponytail: faster command response (was 2s)
         autoStart: true,
-        params: { timeout: 10 }
+        params: { timeout: 30 } // ponytail: stable on flaky connection (was 10)
     }
 });
 
@@ -61,7 +61,7 @@ const activeMonitoring = new Map(); // chatId -> { auctionId, interval }
 
 // Request cache untuk deduplication (hindari double request)
 const requestCache = new Map(); // key -> { result, timestamp }
-const CACHE_TTL = 1000; // 1 detik
+const CACHE_TTL = 2000; // ponytail: 2s saves monitoring requests, bid path bypasses cache (was 1s)
 
 // Session cache dengan expiry lebih lama
 const bidSessionCache = new Map(); // auctionId -> { timestamp, expiry }
@@ -156,7 +156,7 @@ async function fetchBidHistoryDirect(auctionId, cookies, bearerToken) {
         const response = await fetchWithTimeout(
             `https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/${auctionId}/riwayat`,
             { headers, method: "GET" },
-            4000 // 4 detik timeout
+            8000 // ponytail: 8s reduces false timeout on slow connection (was 4s)
         );
 
         if (!response.ok) {
@@ -188,7 +188,7 @@ async function fetchAuctionStatus(auctionId, cookies = null, bearerToken = null)
         const response = await fetchWithTimeout(
             `https://api.lelang.go.id/api/v1/pelaksanaan/${auctionId}/status-lelang?dcp=true`,
             { headers, method: "GET" },
-            4000 // 4 detik timeout
+            8000 // ponytail: 8s reduces false timeout on slow connection (was 4s)
         );
 
         if (!response.ok) {
@@ -231,13 +231,13 @@ async function startBidSessionOptimized(auctionId, cookies, bearerToken) {
                 headers,
                 body: JSON.stringify({ auctionId: auctionIdStr })
             },
-            3000 // 3 detik timeout
+            6000 // ponytail: 6s session start can be slow (was 3s)
         );
 
         if (response.ok) {
             bidSessionCache.set(auctionIdStr, {
                 timestamp: now,
-                expiry: now + 900000 // 15 menit
+                expiry: now + 1800000 // ponytail: 30m reduces session restart overhead (was 15m)
             });
             return { success: true, cached: false };
         }
@@ -286,7 +286,7 @@ async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
                 const bidResponse = await fetchWithTimeout(
                     'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/pengajuan-penawaran',
                     { method: 'POST', headers, body: bidPayload },
-                    5000 // 5 detik timeout
+                    8000 // ponytail: 8s bid critical, don't timeout early (was 5s)
                 );
 
                 if (bidResponse.ok) {
@@ -313,7 +313,7 @@ async function sendBidToAPI(auctionId, passkey, amount, cookies, bearerToken) {
         const bidResponse = await fetchWithTimeout(
             'https://bidding.lelang.go.id/api/v1/pelaksanaan/lelang/pengajuan-penawaran',
             { method: 'POST', headers, body: bidPayload },
-            5000 // 5 detik timeout
+            8000 // ponytail: 8s consistent with fast path (was 5s)
         );
 
         if (!bidResponse.ok) {
@@ -601,6 +601,17 @@ bot.onText(/\/stopmonitor/, (msg) => {
     stopMonitoring(chatId);
 });
 
+// Command: /myid - Tampilkan Chat ID user
+bot.onText(/\/myid/, (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId,
+        '\uD83C\uDD94 *Chat ID kamu:*\n\n' +
+        '`' + chatId + '`' +
+        '\n\nCopy angka ini dan paste ke field Chat ID di Extension.',
+        { parse_mode: 'Markdown' }
+    );
+});
+
 // Command: /help
 bot.onText(/\/help/, (msg) => {
     const chatId = msg.chat.id;
@@ -690,7 +701,7 @@ bot.onText(/\/setbudget (.+)/, async (msg, match) => {
 
     budgetManager.setBudget(chatId, {
         maxBudget: budgetAmount,
-        warningThreshold: 0.9,  // 90%
+        warningThreshold: 0.8,  // ponytail: 80% earlier warning (was 90%)
         autoStop: true
     });
 
@@ -1406,15 +1417,17 @@ async function startSmartMonitoring(chatId) {
                     }
                     // ============================================
 
-                    // Adjust interval based on time remaining
-                    if (minutesRemaining <= 5) {
-                        currentInterval = 1000; // 1 detik untuk 5 menit terakhir
+                    // ponytail: makin dekat deadline makin agresif poll
+                    if (secondsRemaining <= 30) {
+                        currentInterval = 500;  // 0.5s — snipe zone kritis
+                    } else if (minutesRemaining <= 5) {
+                        currentInterval = 1000; // 1s — 5 menit terakhir
                     } else if (minutesRemaining <= 15) {
-                        currentInterval = 2000; // 2 detik untuk 15 menit terakhir
+                        currentInterval = 2000; // 2s — 15 menit terakhir
                     } else if (minutesRemaining <= 60) {
-                        currentInterval = 3000; // 3 detik untuk 1 jam terakhir
+                        currentInterval = 3000; // 3s — 1 jam terakhir
                     } else {
-                        currentInterval = 5000; // 5 detik untuk sisanya
+                        currentInterval = 5000; // 5s — sisanya
                     }
                 }
 
@@ -1699,6 +1712,43 @@ Contoh:
 // ============================================
 // API ENDPOINTS (untuk extension jika masih dipakai)
 // ============================================
+
+// ============================================
+// ENDPOINT: Set session dari Chrome Extension
+// POST /api/set-session { chatId, cookies, bearerToken, auctionId, passkey }
+// ============================================
+app.post('/api/set-session', (req, res) => {
+    const { chatId, cookies, bearerToken, auctionId, passkey } = req.body;
+
+    if (!chatId) {
+        return res.status(400).json({ success: false, error: 'chatId wajib diisi' });
+    }
+
+    const numericChatId = parseInt(chatId);
+    if (isNaN(numericChatId)) {
+        return res.status(400).json({ success: false, error: 'chatId harus angka' });
+    }
+
+    const session = userSessions.get(numericChatId) || {};
+    if (cookies)     session.cookies     = cookies;
+    if (bearerToken) session.bearerToken = bearerToken;
+    if (auctionId)   session.auctionId   = auctionId;
+    if (passkey)     session.passBidding = passkey;
+    userSessions.set(numericChatId, session);
+
+    const parts = [];
+    if (cookies)     parts.push('\u2705 Cookies');
+    if (bearerToken) parts.push('\u2705 Token');
+    if (auctionId)   parts.push('\u2705 Auction: ' + auctionId);
+    if (passkey)     parts.push('\u2705 Passkey');
+
+    bot.sendMessage(numericChatId,
+        '\uD83D\uDD17 *Session dari Extension*\n\n' + parts.join('\n') + '\n\nGunakan /status untuk cek lelang!',
+        { parse_mode: 'Markdown' }
+    ).catch(err => console.error('Gagal kirim konfirmasi:', err.message));
+
+    res.json({ success: true, message: 'Session berhasil di-set' });
+});
 
 app.post('/api/tab-connected', (req, res) => {
     console.log('Tab connected:', req.body);

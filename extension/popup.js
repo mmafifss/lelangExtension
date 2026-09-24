@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const loadingStateEl = document.getElementById('loadingState');
 
     // Bot Telegram Username (sudah di-set)
-    const BOT_USERNAME = 'Lelangkpkbot';
+    const BOT_USERNAME = 'Lelangkpk1bot';
 
     // ============================================
     // FUNGSI: AMBIL COOKIES MENGGUNAKAN CHROME API
@@ -43,7 +43,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         <div id="telegramData" style="font-size: 12px;">
             <p style="margin: 5px 0;">⏳ Memuat data...</p>
         </div>
-        <div style="display: flex; gap: 8px; margin-top: 10px; flex-direction: column;">
+        <div style="display: flex; gap: 6px; margin-top: 10px; align-items: center;">
+            <input id="chatIdInput" type="text" placeholder="Telegram Chat ID kamu" style="flex:1; padding:6px 8px; font-size:12px; border:1px solid #90caf9; border-radius:6px; outline:none;" />
+            <button id="sendToServer" class="button button-primary" style="font-size:12px; background:#1565c0; white-space:nowrap; padding:6px 10px;">
+                🚀 Kirim ke Bot
+            </button>
+        </div>
+        <div id="sendStatus" style="font-size:11px; margin-top:4px; min-height:16px; color:#555;"></div>
+        <div style="display: flex; gap: 8px; margin-top: 6px; flex-direction: column;">
             <div style="display: flex; gap: 8px;">
                 <button id="copyCommands" class="button button-primary" style="flex: 1; font-size: 12px;">
                     📋 Salin Command
@@ -52,6 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     🔄 Refresh
                 </button>
             </div>
+        </div>
             <button id="openTelegramBot" class="button button-primary" style="width: 100%; font-size: 13px; background: linear-gradient(135deg, #0088cc 0%, #005f8c 100%); padding: 12px;">
                 <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
                     <svg style="width: 18px; height: 18px; fill: white;" viewBox="0 0 24 24">
@@ -81,8 +89,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         // Function untuk render data
+        // Inject content script jika belum ada (MV3: tab yang sudah terbuka sebelum install)
+        async function ensureContentScript() {
+            try {
+                await chrome.tabs.sendMessage(tab.id, { action: 'ping' });
+            } catch (_) {
+                // Content script belum inject, inject sekarang
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['content.js']
+                });
+                // Tunggu sebentar biar content script siap
+                await new Promise(r => setTimeout(r, 500));
+            }
+        }
+
         async function renderData() {
-            // Ambil data dari content script
+            // Pastikan content script sudah inject sebelum kirim pesan
+            await ensureContentScript();
             const response = await chrome.tabs.sendMessage(tab.id, { action: 'getLotData' });
 
             if (response && !response.error) {
@@ -279,6 +303,66 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 });
                             } else {
                                 alert('Tidak ada data yang bisa disalin!');
+                            }
+                        });
+                    }
+
+                    // ============================================
+                    // TOMBOL KIRIM KE SERVER (no Telegram formatting dialog)
+                    // ============================================
+                    const sendToServerBtn = document.getElementById('sendToServer');
+                    const chatIdInput = document.getElementById('chatIdInput');
+                    const sendStatus = document.getElementById('sendStatus');
+
+                    // Load saved chatId
+                    chrome.storage.local.get(['telegramChatId'], (saved) => {
+                        if (saved.telegramChatId) chatIdInput.value = saved.telegramChatId;
+                    });
+
+                    if (sendToServerBtn) {
+                        sendToServerBtn.addEventListener('click', async () => {
+                            const chatId = chatIdInput.value.trim();
+                            if (!chatId) {
+                                sendStatus.textContent = '? Masukkan Chat ID dulu';
+                                sendStatus.style.color = 'red';
+                                return;
+                            }
+
+                            // Simpan chatId ke storage
+                            chrome.storage.local.set({ telegramChatId: chatId });
+
+                            const cookiesFromAPI = await getCookiesFromChromeAPI();
+                            const cookiesToUse = cookiesFromAPI || response.cookies;
+
+                            sendToServerBtn.disabled = true;
+                            sendStatus.textContent = '? Mengirim...';
+                            sendStatus.style.color = '#555';
+
+                            try {
+                                const res = await fetch('http://localhost:3000/api/set-session', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        chatId,
+                                        cookies:     cookiesToUse || undefined,
+                                        bearerToken: response.bearerToken || undefined,
+                                        auctionId:   response.auctionId || undefined,
+                                        passkey:     response.passkey || undefined,
+                                    })
+                                });
+                                const json = await res.json();
+                                if (json.success) {
+                                    sendStatus.textContent = '? Terkirim! Cek Telegram.';
+                                    sendStatus.style.color = 'green';
+                                } else {
+                                    sendStatus.textContent = '? ' + (json.error || 'Gagal');
+                                    sendStatus.style.color = 'red';
+                                }
+                            } catch (err) {
+                                sendStatus.textContent = '? Server tidak aktif?';
+                                sendStatus.style.color = 'red';
+                            } finally {
+                                sendToServerBtn.disabled = false;
                             }
                         });
                     }
