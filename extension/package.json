@@ -1,0 +1,21 @@
+{
+  "name": "lelang-bid-extension",
+  "version": "1.0.0",
+  "description": "Chrome extension untuk remote bid lelang.go.id via Telegram bot",
+  "main": "background.js",
+  "scripts": {
+    "build": "echo \"No build process needed for Chrome extension\"",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "chrome-extension",
+    "lelang",
+    "bid",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
