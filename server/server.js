@@ -1335,86 +1335,90 @@ async function startSmartMonitoring(chatId) {
                     const snipeCheck = snipeManager.shouldExecuteSnipe(chatId, secondsRemaining);
                     
                     if (snipeCheck.shouldSnipe) {
-                        console.log(`🎯 Snipe trigger! ${secondsRemaining}s remaining`);
-                        
-                        // Get current price & kelipatan
-                        const historyResult = await fetchBidHistory(
-                            session.auctionId,
-                            session.cookies,
-                            session.bearerToken
+                        const snipe = snipeManager.getSnipe(chatId);
+                        const totalBids = snipe ? snipe.multiplier : 1;
+                        console.log('\uD83C\uDFAF Snipe trigger! ' + secondsRemaining + 's remaining, akan bid ' + totalBids + 'x');
+
+                        bot.sendMessage(chatId,
+                            '\uD83C\uDFAF *SNIPE EXECUTION!*\n\n' +
+                            '\u23F0 ' + secondsRemaining + 's remaining\n' +
+                            '\uD83D\uDD04 Spam ' + totalBids + 'x bid berturut-turut...',
+                            { parse_mode: 'Markdown' }
                         );
 
-                        if (historyResult.success && historyResult.data?.data) {
-                            let riwayat = historyResult.data.data;
-                            if (riwayat.data && Array.isArray(riwayat.data)) {
-                                riwayat = riwayat.data;
-                            }
+                        let successCount = 0;
+                        let lastBidAmount = 0;
 
-                            if (Array.isArray(riwayat) && riwayat.length > 0) {
-                                const currentPrice = parseInt(riwayat[0].bidAmount);
-                                const kelipatanBid = session.sessionData?.kelipatanBid || lot.kelipatanBid || 50000;
+                        for (let bidIdx = 1; bidIdx <= totalBids; bidIdx++) {
+                            try {
+                                // Re-fetch harga terkini setiap iterasi agar selalu +1 kelipatan dari harga tertinggi
+                                const hResult = await fetchBidHistory(
+                                    session.auctionId, session.cookies, session.bearerToken
+                                );
+                                let latestPrice = 0;
+                                if (hResult.success && hResult.data && hResult.data.data) {
+                                    let rw = hResult.data.data;
+                                    if (rw.data && Array.isArray(rw.data)) rw = rw.data;
+                                    if (Array.isArray(rw) && rw.length > 0) {
+                                        latestPrice = parseInt(rw[0].bidAmount);
+                                    }
+                                }
 
-                                // Calculate snipe bid
-                                const snipeBid = snipeManager.calculateSnipeBid(
-                                    chatId,
-                                    currentPrice,
-                                    kelipatanBid
+                                const kelipatanBid = session.sessionData && session.sessionData.kelipatanBid
+                                    ? session.sessionData.kelipatanBid
+                                    : (lot && lot.kelipatanBid ? parseInt(lot.kelipatanBid) : 50000);
+
+                                // Skip jika gagal fetch harga sama sekali
+                                if (latestPrice === 0) {
+                                    console.warn("Snipe bid " + bidIdx + ": harga 0, skip");
+                                    continue;
+                                }
+
+                                const bidAmount = latestPrice + kelipatanBid;
+
+                                // Budget check
+                                const budgetCheck = budgetManager.canBid(chatId, bidAmount);
+                                if (!budgetCheck.allowed) {
+                                    bot.sendMessage(chatId,
+                                        '\u26A0\uFE0F Snipe berhenti di bid ke-' + bidIdx + ': budget habis'
+                                    );
+                                    break;
+                                }
+
+                                const bidResult = await sendBidToAPI(
+                                    session.auctionId, session.passBidding,
+                                    bidAmount, session.cookies, session.bearerToken
                                 );
 
-                                if (snipeBid.success) {
-                                    // Execute snipe!
-                                    bot.sendMessage(chatId, 
-                                        `🎯 *SNIPE EXECUTION!*\n\n` +
-                                        `⏰ ${secondsRemaining}s remaining\n` +
-                                        `💰 Bid: Rp ${snipeBid.bidAmount.toLocaleString('id-ID')}\n` +
-                                        `${snipeBid.limited ? '⚠️ (Limited by budget)' : ''}`,
-                                        { parse_mode: 'Markdown' }
-                                    );
-
-                                    const bidResult = await sendBidToAPI(
-                                        session.auctionId,
-                                        session.passBidding,
-                                        snipeBid.bidAmount,
-                                        session.cookies,
-                                        session.bearerToken
-                                    );
-
-                                    // Track result
-                                    if (bidResult.success) {
-                                        budgetManager.trackBid(chatId, snipeBid.bidAmount, true);
-                                        snipeManager.trackSnipe(chatId, { ...snipeBid, success: true });
-                                        
-                                        bot.sendMessage(chatId,
-                                            `✅ *SNIPE SUCCESS!*\n\n` +
-                                            `🎯 Bid berhasil: Rp ${snipeBid.bidAmount.toLocaleString('id-ID')}\n` +
-                                            `⏰ Waktu: ${secondsRemaining}s sebelum tutup`,
-                                            { parse_mode: 'Markdown' }
-                                        );
-                                    } else {
-                                        snipeManager.trackSnipe(chatId, { ...snipeBid, success: false, error: bidResult.error });
-                                        
-                                        bot.sendMessage(chatId,
-                                            `❌ *SNIPE FAILED!*\n\n` +
-                                            `Error: ${bidResult.error}`,
-                                            { parse_mode: 'Markdown' }
-                                        );
-                                    }
-
-                                    // Disable snipe after execution (one-time)
-                                    snipeManager.disableSnipe(chatId);
+                                if (bidResult.success) {
+                                    budgetManager.trackBid(chatId, bidAmount, true);
+                                    successCount++;
+                                    lastBidAmount = bidAmount;
+                                    console.log('\u2705 Snipe bid ' + bidIdx + '/' + totalBids + ' OK: Rp ' + bidAmount);
                                 } else {
-                                    // Cannot snipe (budget insufficient)
-                                    bot.sendMessage(chatId,
-                                        `⚠️ *SNIPE ABORTED!*\n\n` +
-                                        `Reason: ${snipeBid.error}\n\n` +
-                                        `💰 Insufficient budget untuk compete`,
-                                        { parse_mode: 'Markdown' }
-                                    );
-                                    snipeManager.disableSnipe(chatId);
+                                    console.log('\u274C Snipe bid ' + bidIdx + '/' + totalBids + ' FAIL: ' + bidResult.error);
+                                    // Tetap lanjut ke bid berikutnya
                                 }
+
+                                // Jeda 100ms antar bid
+                                await new Promise(r => setTimeout(r, 100));
+
+                            } catch (bidErr) {
+                                console.error('Snipe bid ' + bidIdx + ' error:', bidErr.message);
                             }
                         }
+
+                        snipeManager.trackSnipe(chatId, { success: successCount > 0 });
+                        snipeManager.disableSnipe(chatId);
+
+                        bot.sendMessage(chatId,
+                            '\uD83C\uDFAF *SNIPE SELESAI!*\n\n' +
+                            '\u2705 Berhasil: ' + successCount + '/' + totalBids + ' bid\n' +
+                            (lastBidAmount ? '\uD83D\uDCB0 Bid terakhir: Rp ' + lastBidAmount.toLocaleString('id-ID') : '\u274C Semua bid gagal'),
+                            { parse_mode: 'Markdown' }
+                        );
                     }
+
                     // ============================================
 
                     // ponytail: makin dekat deadline makin agresif poll
